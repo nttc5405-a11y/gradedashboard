@@ -159,3 +159,64 @@ with col_trend2:
     else:
         # 如果只有一筆資料，顯示提示訊息
         st.info(f"📊 **{trend_person}** 目前只有一筆測驗紀錄，尚無法畫出趨勢線。等下次測驗成績輸入後就會自動出現囉！")
+# --- 8. 多重條件交叉分析 (終極篩選器) ---
+st.markdown("---")
+st.subheader("🎯 終極交叉分析：多重條件自訂篩選")
+st.markdown("<span style='font-size:14px; color:gray;'>*💡 請在下方選擇您想觀察的特定族群，系統會即時撈出資料並繪製分布圖。*</span>", unsafe_allow_html=True)
+
+# 建立四個並排的欄位放篩選器
+col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+
+with col_f1:
+    # 1. 性別篩選 (預設全選)
+    gender_options = df['性別'].unique().tolist()
+    selected_genders = st.multiselect("1. 選擇性別", gender_options, default=gender_options)
+
+with col_f2:
+    # 2. 年齡層篩選 (預設全選，排除空值)
+    # 確保前面已經有執行 pd.cut 產生 '年齡層' 欄位
+    age_options = df['年齡層'].dropna().unique().tolist()
+    selected_ages = st.multiselect("2. 選擇年齡層", age_options, default=age_options)
+
+with col_f3:
+    # 3. 單位/分隊篩選 (預設全選)
+    team_options = df['分隊'].unique().tolist()
+    selected_teams = st.multiselect("3. 選擇單位", team_options, default=team_options)
+
+with col_f4:
+    # 4. 測驗項目 (單選)
+    test_metric = st.selectbox("4. 選擇分析項目", ['3000公尺跑步_秒', '引體向上_下', '負重爬梯_秒', '繩索救援_分數'], key='multi_metric')
+
+# --- 根據篩選條件過濾資料 (核心邏機) ---
+# 使用 Pandas 的 isin() 函數來比對使用者選了哪些東西
+filtered_df = df[
+    (df['性別'].isin(selected_genders)) &
+    (df['年齡層'].isin(selected_ages)) &
+    (df['分隊'].isin(selected_teams))
+]
+
+# --- 繪製多重篩選後的結果圖表 ---
+if filtered_df.empty:
+    # 防呆機制：如果使用者把條件縮得太小（例如選了某個分隊但該分隊剛好沒有女性），導致沒有資料
+    st.warning("⚠️ 在目前的篩選條件下，找不到任何符合的測驗紀錄。請嘗試放寬篩選條件！")
+else:
+    # 畫出盒鬚圖，X軸為分隊，顏色區分性別，滑鼠移過去可以看到每個點(人員)的詳細資料
+    fig_multi = px.box(
+        filtered_df, 
+        x="分隊", 
+        y=test_metric, 
+        color="性別", 
+        points="all", 
+        hover_data=['姓名', '年齡', '測驗日期'], # 滑鼠移到點上會顯示姓名和年齡！
+        title=f"自訂篩選結果：{test_metric} 分布狀況"
+    )
+    
+    # 如果是計時項目(秒)，Y軸反轉(越低越好)
+    if '秒' in test_metric:
+        fig_multi.update_yaxes(autorange="reversed")
+        
+    st.plotly_chart(fig_multi, use_container_width=True)
+    
+    # 貼心小功能：在圖表下方顯示目前篩選出的總人數與平均值
+    avg_score = filtered_df[test_metric].mean()
+    st.info(f"📌 **分析結果摘要**：在目前的篩選條件下，共有 **{len(filtered_df)} 筆** 測驗紀錄。該族群在【{test_metric}】的整體平均成績為 **{avg_score:.1f}**。")
