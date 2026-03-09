@@ -89,3 +89,73 @@ try:
 
 except Exception as e:
     st.error(f"連線或處理資料時發生錯誤：{e}")
+# ==========================================
+# 以下為新增的進階分析區塊，請貼在程式碼最下方
+# ==========================================
+
+# --- 6. 進階群體分析 (年齡層與性別差異) ---
+st.markdown("---")
+st.subheader("🔍 進階群體分析 (年齡與性別差異)")
+
+# 利用 Pandas 將年齡分組 (自動把年齡轉換成對應的年齡層標籤)
+bins = [20, 30, 40, 50, 65]
+labels = ['20-29歲', '30-39歲', '40-49歲', '50歲以上']
+df['年齡層'] = pd.cut(df['年齡'], bins=bins, labels=labels, right=False)
+
+col3, col4 = st.columns(2)
+
+with col3:
+    st.markdown("**各年齡層在測驗項目的表現差異**")
+    age_metric = st.selectbox("請選擇測驗項目 (年齡分析)", ['3000公尺跑步_秒', '引體向上_下', '負重爬梯_秒', '繩索救援_分數'], key='age_metric')
+    
+    # 畫出年齡層的盒鬚圖
+    fig_age = px.box(df, x="年齡層", y=age_metric, color="年齡層", category_orders={"年齡層": labels})
+    
+    # 如果是計時項目(秒)，Y軸反轉(越低越好)
+    if '秒' in age_metric:
+        fig_age.update_yaxes(autorange="reversed") 
+    st.plotly_chart(fig_age, use_container_width=True)
+
+with col4:
+    st.markdown("**男女在各項目的平均差異**")
+    # 檢查試算表中是否已經加入了「性別」欄位
+    if '性別' in df.columns:
+        gender_metric = st.selectbox("請選擇測驗項目 (性別分析)", ['3000公尺跑步_秒', '引體向上_下', '負重爬梯_秒', '繩索救援_分數'], key='gender_metric')
+        
+        # 畫出男女差異的盒鬚圖
+        fig_gender = px.box(df, x="性別", y=gender_metric, color="性別")
+        if '秒' in gender_metric:
+            fig_gender.update_yaxes(autorange="reversed")
+        st.plotly_chart(fig_gender, use_container_width=True)
+    else:
+        # 如果試算表還沒加性別欄位，顯示友善的提醒
+        st.warning("⚠️ 查無「性別」欄位。請先在 Google Sheets 中新增「性別」欄位（填入男/女），此圖表便會自動出現！")
+
+
+# --- 7. 個人歷年成績隨時間之變化 ---
+st.markdown("---")
+st.subheader("⏳ 個人成績隨時間變化軌跡")
+st.markdown("<span style='font-size:14px; color:gray;'>*💡 選擇人員與項目，觀察長期的進步或退步趨勢。時間/秒數類測驗，折線往下代表進步！*</span>", unsafe_allow_html=True)
+
+col_trend1, col_trend2 = st.columns([1, 3])
+
+with col_trend1:
+    trend_person = st.selectbox("請選擇要追蹤的人員", df['姓名'].unique(), key='trend_person')
+    trend_metric = st.selectbox("請選擇要追蹤的測驗項目", ['3000公尺跑步_秒', '引體向上_下', '負重爬梯_秒', '繩索救援_分數'], key='trend_metric')
+
+with col_trend2:
+    # 篩選出該名人員的所有歷史紀錄，並依時間排序
+    person_history = df[df['姓名'] == trend_person].sort_values(by='測驗日期')
+    
+    # 至少要有兩筆以上的資料才能畫趨勢線
+    if len(person_history) > 1:
+        fig_person_trend = px.line(person_history, x='測驗日期', y=trend_metric, markers=True, text=trend_metric)
+        fig_person_trend.update_traces(textposition="bottom right") # 把數值顯示在點的右下方
+        
+        if '秒' in trend_metric:
+            fig_person_trend.update_yaxes(autorange="reversed")
+            
+        st.plotly_chart(fig_person_trend, use_container_width=True)
+    else:
+        # 如果只有一筆資料，顯示提示訊息
+        st.info(f"📊 **{trend_person}** 目前只有一筆測驗紀錄，尚無法畫出趨勢線。等下次測驗成績輸入後就會自動出現囉！")
