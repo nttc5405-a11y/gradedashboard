@@ -8,7 +8,7 @@ st.title("🚒 成功消防大隊 - 體技能成績分析看板")
 
 # --- 2. 串接 Google Sheets 資料 ---
 # ⚠️ 請把下面這串網址，換成你剛剛在「第一步」複製的 Google Sheets CSV 網址
-sheet_url = "請在這裡貼上你的CSV網址" 
+sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQZVbsBMLdNws_DwHxVBuhc7VaA8oNdOakUmXfE28USGAhKhp1f1ni23kWrhBOESPg70Dr-fwYLYGfH/pub?gid=0&single=true&output=csv" 
 
 # 使用 @st.cache_data 可以讓資料暫存，不用每次點擊都重新下載，提升網頁速度 (ttl=60代表每60秒才更新一次)
 @st.cache_data(ttl=60)
