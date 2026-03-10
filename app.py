@@ -66,8 +66,13 @@ if df is not None and len(test_metrics) > 0:
         
         c1, c2 = st.columns(2)
         with c1:
-            avg_df = df.groupby('分隊')[selected_metric].mean().reset_index()
-            fig_bar = px.bar(avg_df, x='分隊', y=selected_metric, color='分隊', text_auto='.1f', title=f"各分隊 {selected_metric} 平均")
+            # 修正：只抓取「最新一次測驗」的資料來算各分隊平均
+            latest_df = df[df['測驗日期'] == latest_date]
+            avg_df = latest_df.groupby('分隊')[selected_metric].mean().reset_index()
+            
+            # 標題加上最新日期，讓長官一目了然
+            fig_bar = px.bar(avg_df, x='分隊', y=selected_metric, color='分隊', text_auto='.1f', title=f"各分隊 {selected_metric} 現況戰力 ({latest_date})")
+            
             if '秒' in selected_metric: fig_bar.update_yaxes(autorange="reversed")
             st.plotly_chart(fig_bar, use_container_width=True)
         with c2:
