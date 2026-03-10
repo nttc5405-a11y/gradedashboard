@@ -83,19 +83,44 @@ if df is not None and len(test_metrics) > 0:
 
     # --- Tab 2: 族群交叉分析 ---
     with tab_group:
-        f1, f2, f3, f4 = st.columns(4)
-        with f1: s_gen = st.multiselect("性別", df['性別'].unique(), default=df['性別'].unique().tolist())
-        with f2: s_age = st.multiselect("年齡層", df['年齡層'].dropna().unique().tolist(), default=df['年齡層'].dropna().unique().tolist())
-        with f3: s_team = st.multiselect("分隊", df['分隊'].unique(), default=df['分隊'].unique().tolist())
-        with f4: s_met = st.selectbox("分析項目", test_metrics, key='gr_m')
+        st.subheader("🕵️ 多維度族群交叉篩選")
         
-        filtered = df[(df['性別'].isin(s_gen)) & (df['年齡層'].isin(s_age)) & (df['分隊'].isin(s_team))]
+        # 改成 5 個並排的欄位來容納「日期篩選」
+        f1, f2, f3, f4, f5 = st.columns(5)
+        
+        # 抓取所有日期清單
+        all_dates_list = sorted(df['測驗日期'].dropna().unique(), reverse=True)
+        
+        with f1: 
+            # 預設放入 latest_date，確保一開始畫面只顯示最新成績
+            s_date = st.multiselect("測驗日期", all_dates_list, default=[latest_date])
+        with f2: 
+            s_gen = st.multiselect("性別", df['性別'].dropna().unique(), default=df['性別'].dropna().unique().tolist())
+        with f3: 
+            s_age = st.multiselect("年齡層", df['年齡層'].dropna().unique().tolist(), default=df['年齡層'].dropna().unique().tolist())
+        with f4: 
+            s_team = st.multiselect("分隊", df['分隊'].dropna().unique(), default=df['分隊'].dropna().unique().tolist())
+        with f5: 
+            s_met = st.selectbox("分析項目", test_metrics, key='gr_m')
+        
+        # 核心邏輯升級：把日期 (s_date) 也加入過濾條件中！
+        filtered = df[
+            (df['測驗日期'].isin(s_date)) & 
+            (df['性別'].isin(s_gen)) & 
+            (df['年齡層'].isin(s_age)) & 
+            (df['分隊'].isin(s_team))
+        ]
+        
         if not filtered.empty:
-            fig_box = px.box(filtered, x="分隊", y=s_met, color="性別", points="all", hover_data=['姓名'])
+            # 畫出盒鬚圖，滑鼠游標移過去依然會顯示姓名與測驗日期
+            fig_box = px.box(filtered, x="分隊", y=s_met, color="性別", points="all", hover_data=['姓名', '測驗日期'])
             if '秒' in s_met: fig_box.update_yaxes(autorange="reversed")
             st.plotly_chart(fig_box, use_container_width=True)
+            
+            # 顯示篩選後的總人數，幫助教官確認資料量
+            st.info(f"📌 此條件下共篩選出 **{len(filtered)}** 筆成績紀錄。")
         else:
-            st.warning("⚠️ 找不到符合條件的資料。")
+            st.warning("⚠️ 找不到符合篩選條件的資料，請放寬限制。")
 
     # --- Tab 3: 個人追蹤儀表 (導入 PR 值雷達圖) ---
     with tab_individual:
