@@ -14,7 +14,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🚒 成功消防大隊 - 體技能戰情室 3.0 (實戰進階版)")
+st.title("🚒 成功消防大隊 - 體技能儀表板")
 
 @st.cache_data(ttl=60)
 def load_and_clean_data():
