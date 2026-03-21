@@ -6,13 +6,13 @@ import numpy as np
 st.set_page_config(page_title="成功消防大隊 - 體技能儀表板", page_icon="🚒", layout="wide")
 
 #st.markdown("""
-    <style>
-    [data-testid="stMetricValue"] { font-size: 28px; color: #FF4B4B; }
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; font-weight: bold; font-size: 18px; }
-    .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
+#    <style>
+ #   [data-testid="stMetricValue"] { font-size: 28px; color: #FF4B4B; }
+ #   .stTabs [data-baseweb="tab-list"] { gap: 24px; }
+ #   .stTabs [data-baseweb="tab"] { height: 50px; font-weight: bold; font-size: 18px; }
+ #   .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 10px; }
+ #   </style>
+ #   """, unsafe_allow_html=True)
     
 st.markdown("""
     <style>
