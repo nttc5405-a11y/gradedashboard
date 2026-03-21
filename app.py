@@ -6,136 +6,138 @@ import numpy as np
 # --- 頁面基本設定 ---
 st.set_page_config(page_title="成功消防大隊 - 戰情室 3.0", page_icon="🚒", layout="wide")
 
-# 自訂 CSS
 st.markdown("""
     <style>
     [data-testid="stMetricValue"] { font-size: 28px; color: #FF4B4B; }
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; font-weight: bold; font-size: 18px; }
     .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🚒 成功消防大隊 - 體技能戰情室 3.0 (穩定運作版)")
+st.title("🚒 成功消防大隊 - 體技能戰情室 3.0 (穩定版)")
 
-# --- 1. 資料讀取與清洗 (解決命名衝突) ---
 @st.cache_data(ttl=60)
 def load_and_clean_data():
     try:
         url = st.secrets["sheet_url"]
         raw_df = pd.read_csv(url)
         
-        # 移除全空行
-        raw_df = raw_df.dropna(subset=['單位'], how='all').reset_index(drop=True)
+        # 1. 移除全空行與標題重複行
+        raw_df = raw_df.dropna(subset=['姓名']).reset_index(drop=True)
 
-        # 分離：第一列是紀錄，第二列是分數
+        # 2. 分離：偶數列是「紀錄」，奇數列是「分數」
+        # 每位隊員佔 2 列，所以 62 列資料會產生 31 位隊員
         data_rows = raw_df.iloc[::2].reset_index(drop=True)
         score_rows = raw_df.iloc[1::2].reset_index(drop=True)
 
-        # 定義基本資料欄位
-        base_cols = ['NO.', '單位', '姓名', '性別', '年齡']
+        # 定義身分欄位
+        id_cols = ['NO.', '單位', '姓名', '性別', '年齡']
         
-        # 【重要步驟】重命名紀錄列的所有欄位，加上後綴 "_紀錄"
-        # 這樣就不會跟分數列的「總成績」、「體能合計」撞名了
-        new_data_cols = {}
-        for col in data_rows.columns:
-            if col not in base_cols and '備註' not in col:
-                new_data_cols[col] = f"{col}_紀錄"
-        data_rows = data_rows.rename(columns=new_data_cols)
+        # 3. 處理紀錄列 (加上 _紀錄 後綴)
+        # 找出除了身分欄位以外的測驗項目
+        test_items = [c for c in data_rows.columns if c not in id_cols and '備註' not in c]
+        
+        data_rows_renamed = data_rows[id_cols].copy()
+        for item in test_items:
+            data_rows_renamed[f"{item}_紀錄"] = data_rows[item]
 
-        # 處理分數列：只保留我們要的分數數值
-        # 排除掉基本資料欄位，避免合併後出現 姓名_x, 姓名_y
-        score_only_cols = [c for c in score_rows.columns if c not in base_cols]
-        score_rows_subset = score_rows[score_only_cols]
+        # 4. 處理分數列 (加上 _分數 後綴)
+        # 我們只需要分數數值，不需要重複的姓名單位
+        score_rows_renamed = pd.DataFrame()
+        for item in test_items:
+            # 針對總成績或合計，維持原本名稱方便顯示，其他的加上 _分數
+            if '合計' in item or '總成績' in item:
+                score_rows_renamed[item] = score_rows[item]
+            else:
+                score_rows_renamed[f"{item}_分數"] = score_rows[item]
 
-        # 橫向合併 (紀錄 + 分數)
-        df = pd.concat([data_rows, score_rows_subset], axis=1)
+        # 5. 強制橫向合併 (31位隊員，每一位現在都有一長串唯一的欄位)
+        df = pd.concat([data_rows_renamed, score_rows_renamed], axis=1)
 
-        # 排除非數值欄位，其餘通通轉數字
-        # 這裡會逐一欄位轉換，避免 ambiguous 錯誤
-        for col in df.columns:
-            if col not in ['單位', '姓名', '性別', '備註', '名次', '年齡層']:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+        # 6. 轉數字處理
+        cols_to_fix = [c for c in df.columns if c not in ['單位', '姓名', '性別']]
+        for col in cols_to_fix:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
         # 建立年齡層
         if '年齡' in df.columns:
             bins = [20, 30, 40, 50, 70]
             labels = ['20-29歲', '30-39歲', '40-49歲', '50歲以上']
             df['年齡層'] = pd.cut(df['年齡'], bins=bins, labels=labels, right=False)
+
+        # 定義繪圖用的清單
+        # 分數清單：包含「_分數」結尾以及「總成績/合計」
+        all_score_metrics = [c for c in score_rows_renamed.columns if '備註' not in c]
         
-        # 定義清單供後續使用
-        score_metrics = [c for c in score_only_cols if '備註' not in c and '名次' not in c]
-        
-        return df, score_metrics
+        return df, all_score_metrics, test_items
     except Exception as e:
-        st.error(f"資料處理失敗。錯誤訊息：{e}")
-        return None, []
+        st.error(f"資料處理失敗：{e}")
+        return None, [], []
 
-df, score_metrics = load_and_clean_data()
+df, score_metrics, original_tests = load_and_clean_data()
 
-# --- 2. 介面呈現 ---
 if df is not None:
-    # 頂部 KPI 區
+    # --- KPI 區 ---
     k1, k2, k3, k4 = st.columns(4)
     with k1: st.metric("受測總人數", f"{len(df)} 人")
-    with k2: 
-        max_score = df['總成績'].max()
-        st.metric("大隊最高分", f"{max_score:.1f}")
-    with k3: st.metric("單位總數", f"{df['單位'].nunique()}")
-    with k4: 
-        avg_score = df['總成績'].mean()
-        st.metric("大隊平均分", f"{avg_score:.1f}")
+    with k2: st.metric("最高總分數", f"{df['總成績'].max() if '總成績' in df.columns else 0:.1f}")
+    with k3: st.metric("受測分隊數", f"{df['單位'].nunique()}")
+    with k4: st.metric("平均總分", f"{df['總成績'].mean() if '總成績' in df.columns else 0:.1f}")
 
-    tab_overview, tab_individual, tab_ranking = st.tabs(["📊 大隊趨勢", "🎯 個人分析", "🏆 成績排行"])
+    tab1, tab2, tab3 = st.tabs(["📊 大隊總覽", "🎯 個人分析", "🏆 排行榜"])
 
-    # 大隊分析
-    with tab_overview:
-        selected_m = st.selectbox("選擇分析指標（分數）：", score_metrics, index=len(score_metrics)-1)
+    # --- Tab 1: 大隊分析 ---
+    with tab1:
+        selected_m = st.selectbox("請選擇分析指標：", score_metrics, index=len(score_metrics)-1)
         c1, c2 = st.columns(2)
         with c1:
             avg_df = df.groupby('單位')[selected_m].mean().reset_index().sort_values(by=selected_m, ascending=False)
-            fig_bar = px.bar(avg_df, x='單位', y=selected_m, color='單位', text_auto='.1f', title=f"各單位 {selected_m} 平均表現")
+            fig_bar = px.bar(avg_df, x='單位', y=selected_m, color='單位', text_auto='.1f', title=f"各分隊 {selected_m} 平均")
             st.plotly_chart(fig_bar, use_container_width=True)
         with c2:
-            fig_box = px.box(df, x='單位', y=selected_m, color='性別', points="all", hover_data=['姓名'], title=f"{selected_m} 分數分佈")
+            # 這裡解決了 DuplicateError，因為欄位名現在是唯一的
+            fig_box = px.box(df, x='單位', y=selected_m, color='性別', points="all", hover_data=['姓名'], title=f"{selected_m} 分佈情況")
             st.plotly_chart(fig_box, use_container_width=True)
 
-    # 個人分析
-    with tab_individual:
+    # --- Tab 2: 個人分析 ---
+    with tab2:
         p_name = st.selectbox("搜尋隊員姓名", df['姓名'].unique())
         person = df[df['姓名'] == p_name].iloc[0]
         
         ci, cg = st.columns([1, 2])
         with ci:
             st.success(f"### {person['姓名']}")
-            st.write(f"**所屬單位：** {person['單位']}")
+            st.write(f"**單位：** {person['單位']} | **年齡：** {person['年齡']}")
             st.write(f"**總成績：** {person['總成績']}")
-            st.write("---")
-            # 建立細節表格
+            
+            # 顯示數據表格
             details = []
-            for m in score_metrics:
-                if '合計' not in m and '成績' not in m:
+            for item in original_tests:
+                if '合計' not in item and '總成績' not in item:
                     details.append({
-                        "項目": m,
-                        "原始紀錄": person.get(f"{m}_紀錄", "N/A"),
-                        "得分": person.get(m, 0)
+                        "測驗項目": item,
+                        "原始紀錄": person.get(f"{item}_紀錄", "N/A"),
+                        "得分": person.get(f"{item}_分數", 0)
                     })
             st.table(pd.DataFrame(details))
 
         with cg:
-            # 雷達圖
-            radar_items = [m for m in score_metrics if '合計' not in m and '成績' not in m]
-            radar_df = pd.DataFrame({"項目": radar_items, "分數": [person[m] for m in radar_items]})
+            # 雷達圖邏輯
+            radar_items = [m for m in score_metrics if '合計' not in m and '總成績' not in m]
+            radar_df = pd.DataFrame({
+                "項目": [m.replace('_分數', '') for m in radar_items],
+                "分數": [person[m] for m in radar_items]
+            })
             fig_radar = px.line_polar(radar_df, r='分數', theta='項目', line_close=True, range_r=[0, 100])
             fig_radar.update_traces(fill='toself', line_color='#FF4B4B')
             st.plotly_chart(fig_radar, use_container_width=True)
 
-    # 排行榜
-    with tab_ranking:
+    # --- Tab 3: 排行榜 ---
+    with tab3:
         st.subheader("🏆 全大隊成績排行")
+        # 只顯示關鍵欄位
         rank_cols = ['單位', '姓名', '年齡', '體能合計40%', '技能合計60%', '總成績']
-        available = [c for c in rank_cols if c in df.columns]
-        st.dataframe(df[available].sort_values(by='總成績', ascending=False), use_container_width=True, hide_index=True)
+        display_df = df[[c for c in rank_cols if c in df.columns]].sort_values(by='總成績', ascending=False)
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 else:
-    st.warning("等待資料載入中，請檢查連結與 Secrets 設定。")
+    st.info("請檢查 Google Sheet 權限與 Secret URL 設定。")
