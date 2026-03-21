@@ -23,53 +23,58 @@ st.title("🚒 成功消防大隊 - 體技能戰情室 3.0 (自動合併版)")
 def load_and_clean_data():
     try:
         url = st.secrets["sheet_url"]
-        # 讀取 CSV (預設讀取第一個分頁)
-        raw_df = pd.read_csv(url)
+        raw_df = pd.csv(url)
         
-        # 過濾掉完全空白的行，確保資料連續
+        # 1. 基本清理：移除全空行
         raw_df = raw_df.dropna(subset=['單位'], how='all').reset_index(drop=True)
 
-        # 分離「紀錄列」(偶數索引 0, 2, 4...) 與 「分數列」(奇數索引 1, 3, 5...)
-        # 根據圖片，紀錄在第一列，分數在第二列
+        # 2. 分離「紀錄列」與「分數列」
         data_rows = raw_df.iloc[::2].reset_index(drop=True)
         score_rows = raw_df.iloc[1::2].reset_index(drop=True)
 
-        # 定義哪些是基本資料欄位 (不參與分數運算)
+        # 3. 定義基本資料欄位
         base_info_cols = ['NO.', '單位', '姓名', '性別', '年齡']
         
-        # 找出所有的測驗項目欄位
-        test_cols = [c for c in data_rows.columns if c not in base_info_cols and '備註' not in c and '名次' not in c]
+        # 4. 處理「紀錄列」：除了基本資料外，其餘項目加上 "_紀錄"
+        # 這樣就不會跟後面的分數欄位撞名了
+        data_cols_renamed = {}
+        for col in data_rows.columns:
+            if col not in base_info_cols and '備註' not in col and '名次' not in col:
+                data_cols_renamed[col] = f"{col}_紀錄"
+        data_rows = data_rows.rename(columns=data_cols_renamed)
 
-        # 為了避免合併後名稱混淆，將分數列的欄位加上 "_分數" 字樣
-        # 但保留「合計」與「總成績」這類關鍵字
-        renamed_scores = {}
-        for col in test_cols:
-            if '合計' in col or '成績' in col:
-                renamed_scores[col] = col # 保持原名
-            else:
-                renamed_scores[col] = f"{col}_分數"
+        # 5. 處理「分數列」：只保留分數的部分
+        # 我們要把分數列中的 '體能合計', '總成績' 等欄位保留下來作為主要數據
+        other_cols = [c for c in score_rows.columns if c not in base_info_cols]
+        score_rows_subset = score_rows[other_cols]
+
+        # 6. 橫向合併 (這時候欄位名稱已經完全唯一了)
+        df = pd.concat([data_rows, score_rows_subset], axis=1)
+
+        # 7. 將所有非文字欄位轉為數字
+        # 我們排除掉基本資料欄位，剩下的通通轉數字
+        for col in df.columns:
+            if col not in ['單位', '姓名', '性別', '備註']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        # 8. 建立年齡層
+        if '年齡' in df.columns:
+            bins = [20, 30, 40, 50, 70]
+            labels = ['20-29歲', '30-39歲', '40-49歲', '50歲以上']
+            df['年齡層'] = pd.cut(df['年齡'], bins=bins, labels=labels, right=False)
         
-        score_rows_renamed = score_rows[test_cols].rename(columns=renamed_scores)
+        # 9. 重新定義圖表要用的分數清單
+        # 只要不是基本資料、不是「_紀錄」結尾、不是備註，就是分數
+        score_metrics = [c for c in score_rows_subset.columns if '備註' not in c and '名次' not in c]
+        # 紀錄清單（用於個人明細）
+        record_metrics = [c for c in df.columns if '_紀錄' in c]
 
-        # 橫向合併：[基本資料 + 原始紀錄] + [重新命名的分數]
-        df = pd.concat([data_rows, score_rows_renamed], axis=1)
-
-        # 清理資料：轉為數字
-        numeric_cols = [c for c in df.columns if c not in base_info_cols and '備註' not in c]
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-
-        # 建立年齡層
-        bins = [20, 30, 40, 50, 70]
-        labels = ['20-29歲', '30-39歲', '40-49歲', '50歲以上']
-        df['年齡層'] = pd.cut(df['年齡'], bins=bins, labels=labels, right=False)
-        
-        # 篩選出圖表要用的「分數型」欄位清單
-        score_metrics = [c for c in df.columns if '_分數' in c or '合計' in c or '總成績' in c]
-
-        return df, score_metrics, test_cols
+        return df, score_metrics, record_metrics
     except Exception as e:
-        st.error(f"資料處理失敗，請確認表格格式是否正確。錯誤訊息：{e}")
+        st.error(f"資料處理失敗。錯誤訊息：{e}")
+        # 這裡多加一個 debug 資訊，幫你看看目前抓到的欄位
+        if 'df' in locals():
+            st.write("目前偵測到的欄位有：", df.columns.tolist())
         return None, [], []
 
 df, score_metrics, record_metrics = load_and_clean_data()
