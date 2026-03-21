@@ -5,6 +5,7 @@ import numpy as np
 
 st.set_page_config(page_title="成功消防大隊 - 戰情室 3.0", page_icon="🚒", layout="wide")
 
+# 強制自訂 CSS 樣式
 st.markdown("""
     <style>
     [data-testid="stMetricValue"] { font-size: 28px; color: #FF4B4B; }
@@ -14,10 +15,26 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🚒 成功消防大隊 - 體技能戰情室 3.0 (動態擴展版)")
+st.title("🚒 成功消防大隊 - 體技能戰情室 3.0 (測驗表同步版)")
 
-# --- 定義系統基本欄位 (不會被當成測驗項目的欄位) ---
-BASE_COLS = ['測驗日期', '分隊', '姓名', '性別', '年齡', '年齡層']
+# --- 根據圖片定義欄位結構 ---
+# 基本資料
+BASE_COLS = ['測驗日期', '分隊', '姓名', '性別', '年齡']
+
+# 體能項目 (40%)
+PHYSICAL_METRICS = [
+    '立定跳遠', '後拋擲遠', '6公尺30秒折返跑', 
+    '菱形槓硬舉', '懸吊屈體', '負重行走', '1500公尺跑走'
+]
+
+# 技能項目 (60%)
+SKILL_METRICS = [
+    '結索能力', '繩索登降', '固定點架設', 
+    '滑輪拖拉架設', '緊繃繩系統架設'
+]
+
+# 總分項目
+TOTAL_METRICS = ['體能合計40%', '技能合計60%', '總成績']
 
 @st.cache_data(ttl=60)
 def load_and_clean_data():
@@ -25,186 +42,101 @@ def load_and_clean_data():
         url = st.secrets["sheet_url"]
         df = pd.read_csv(url)
         
-        # 魔法 1：自動抓出所有的「測驗項目」
-        # 只要不在 BASE_COLS 裡面的欄位，通通視為測驗項目
-        dynamic_metrics = [col for col in df.columns if col not in ['測驗日期', '分隊', '姓名', '性別', '年齡']]
+        # 處理「分數部分在奇數列」的邏輯：
+        # 如果你的 CSV 結構是 [項目1_紀錄, 項目1_分數, 項目2_紀錄, 項目2_分數...]
+        # 我們通常會分析「分數」來做圖表，分析「紀錄」來查看個人細節
         
-        # 將抓到的測驗項目通通轉為數字
-        for m in dynamic_metrics:
-            df[m] = pd.to_numeric(df[m], errors='coerce')
+        all_cols = df.columns.tolist()
         
+        # 將所有數值欄位轉為數字
+        numeric_cols = [c for c in all_cols if c not in BASE_COLS]
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # 新增年齡層
         bins = [20, 30, 40, 50, 70]
         labels = ['20-29歲', '30-39歲', '40-49歲', '50歲以上']
         df['年齡層'] = pd.cut(df['年齡'], bins=bins, labels=labels, right=False)
-        df = df.sort_values(by=['姓名', '測驗日期'])
         
-        return df, dynamic_metrics
+        return df, numeric_cols
     except Exception as e:
-        st.error(f"資料讀取失敗，請檢查。錯誤訊息：{e}")
+        st.error(f"資料讀取失敗：{e}")
         return None, []
 
-df, test_metrics = load_and_clean_data()
+df, all_metrics = load_and_clean_data()
 
-if df is not None and len(test_metrics) > 0:
+if df is not None:
+    # 這裡自動偵測你的 CSV 中哪些是「分數」欄位
+    # 假設分數欄位名稱包含 "分數" 字樣，或你提到的奇數索引邏輯
+    score_metrics = [m for m in all_metrics if "分數" in m or "合計" in m or "成績" in m]
+    if not score_metrics: # 如果 CSV 沒寫分數兩字，就用全部項目
+        score_metrics = all_metrics
+
     all_dates = sorted(df['測驗日期'].unique(), reverse=True)
     latest_date = all_dates[0]
     
+    # 頂部 Kpi
     k1, k2, k3, k4 = st.columns(4)
     with k1: st.metric("本次測驗總人數", f"{len(df[df['測驗日期']==latest_date])} 人")
-    with k2: st.metric("動態追蹤項目數", f"{len(test_metrics)} 項")
+    with k2: 
+        top_scorer = df[df['測驗日期']==latest_date].sort_values(by='總成績', ascending=False).iloc[0]
+        st.metric("本次最高分", f"{top_scorer['總成績']}", f"🏆 {top_scorer['姓名']}")
     with k3: st.metric("受測分隊數", f"{df['分隊'].nunique()} 個")
     with k4: st.metric("最新測驗日期", f"{latest_date}")
 
     tab_overview, tab_group, tab_individual, tab_alert = st.tabs([
-        "📊 戰情總覽", "🔍 交叉分析", "🎯 個人雷達", "🚨 自訂警示"
+        "📊 戰情總覽", "🔍 交叉分析", "🎯 個人雷達", "🚨 警示名單"
     ])
 
     # --- Tab 1: 大隊戰情總覽 ---
     with tab_overview:
-        # 魔法 2：下拉選單吃動態清單 test_metrics
-        selected_metric = st.selectbox("請選擇觀測項目：", test_metrics, key='ov_m')
+        selected_metric = st.selectbox("請選擇觀測指標（分數）：", score_metrics)
         
         c1, c2 = st.columns(2)
         with c1:
-            # 修正：只抓取「最新一次測驗」的資料來算各分隊平均
             latest_df = df[df['測驗日期'] == latest_date]
             avg_df = latest_df.groupby('分隊')[selected_metric].mean().reset_index()
-            
-            # 標題加上最新日期，讓長官一目了然
-            fig_bar = px.bar(avg_df, x='分隊', y=selected_metric, color='分隊', text_auto='.1f', title=f"各分隊 {selected_metric} 現況戰力 ({latest_date})")
-            
-            if '秒' in selected_metric: fig_bar.update_yaxes(autorange="reversed")
+            fig_bar = px.bar(avg_df, x='分隊', y=selected_metric, color='分隊', text_auto='.1f', 
+                             title=f"各分隊 {selected_metric} 平均表現")
             st.plotly_chart(fig_bar, use_container_width=True)
         with c2:
             trend_df = df.groupby('測驗日期')[selected_metric].mean().reset_index()
-            fig_line = px.line(trend_df, x='測驗日期', y=selected_metric, markers=True, title=f"大隊 {selected_metric} 趨勢")
-            if '秒' in selected_metric: fig_line.update_yaxes(autorange="reversed")
+            fig_line = px.line(trend_df, x='測驗日期', y=selected_metric, markers=True, title=f"大隊 {selected_metric} 歷次趨勢")
             st.plotly_chart(fig_line, use_container_width=True)
 
-    # --- Tab 2: 族群交叉分析 ---
-    with tab_group:
-        st.subheader("🕵️ 多維度族群交叉篩選")
-        
-        # 改成 5 個並排的欄位來容納「日期篩選」
-        f1, f2, f3, f4, f5 = st.columns(5)
-        
-        # 抓取所有日期清單
-        all_dates_list = sorted(df['測驗日期'].dropna().unique(), reverse=True)
-        
-        with f1: 
-            # 預設放入 latest_date，確保一開始畫面只顯示最新成績
-            s_date = st.multiselect("測驗日期", all_dates_list, default=[latest_date])
-        with f2: 
-            s_gen = st.multiselect("性別", df['性別'].dropna().unique(), default=df['性別'].dropna().unique().tolist())
-        with f3: 
-            s_age = st.multiselect("年齡層", df['年齡層'].dropna().unique().tolist(), default=df['年齡層'].dropna().unique().tolist())
-        with f4: 
-            s_team = st.multiselect("分隊", df['分隊'].dropna().unique(), default=df['分隊'].dropna().unique().tolist())
-        with f5: 
-            s_met = st.selectbox("分析項目", test_metrics, key='gr_m')
-        
-        # 核心邏輯升級：把日期 (s_date) 也加入過濾條件中！
-        filtered = df[
-            (df['測驗日期'].isin(s_date)) & 
-            (df['性別'].isin(s_gen)) & 
-            (df['年齡層'].isin(s_age)) & 
-            (df['分隊'].isin(s_team))
-        ]
-        
-        if not filtered.empty:
-            # 畫出盒鬚圖，滑鼠游標移過去依然會顯示姓名與測驗日期
-            fig_box = px.box(filtered, x="分隊", y=s_met, color="性別", points="all", hover_data=['姓名', '測驗日期'])
-            if '秒' in s_met: fig_box.update_yaxes(autorange="reversed")
-            st.plotly_chart(fig_box, use_container_width=True)
-            
-            # 顯示篩選後的總人數，幫助教官確認資料量
-            st.info(f"📌 此條件下共篩選出 **{len(filtered)}** 筆成績紀錄。")
-        else:
-            st.warning("⚠️ 找不到符合篩選條件的資料，請放寬限制。")
-
-    # --- Tab 3: 個人追蹤儀表 (導入 PR 值雷達圖) ---
+    # --- Tab 3: 個人雷達圖 (依照圖片區分體能與技能) ---
     with tab_individual:
-        cp1, cp2 = st.columns([1, 2])
-        with cp1:
-            p_name = st.selectbox("選擇隊員", df['姓名'].unique())
-            person_all_data = df[df['姓名'] == p_name].sort_values(by='測驗日期', ascending=False)
-            p_latest = person_all_data.iloc[0]
-            st.info(f"**姓名：** {p_latest['姓名']} | **單位：** {p_latest['分隊']}")
+        p_name = st.selectbox("選擇隊員", df['姓名'].unique())
+        p_latest = df[(df['姓名'] == p_name) & (df['測驗日期'] == latest_date)].iloc[0]
+        
+        col_info, col_radar = st.columns([1, 2])
+        with col_info:
+            st.info(f"**{p_latest['姓名']}** ({p_latest['分隊']})")
+            st.write(f"🔹 **總成績：{p_latest['總成績']}**")
+            st.write(f"🔹 體能合計(40%)：{p_latest.get('體能合計40%', 'N/A')}")
+            st.write(f"🔹 技能合計(60%)：{p_latest.get('技能合計60%', 'N/A')}")
             
-            st.write("**最新成績明細：**")
-            for m in test_metrics:
-                st.write(f"- {m}：{p_latest[m]}")
-                
-        with cp2:
-            # 魔法 3：動態計算所有項目的 PR 值 (打敗大隊多少人)
-            radar_scores = []
-            valid_metrics = []
-            
-            for m in test_metrics:
-                val = p_latest[m]
-                if pd.notna(val):
-                    # 抓取最新一次測驗的全大隊成績當作母體
-                    latest_all = df[df['測驗日期'] == latest_date][m].dropna()
-                    if len(latest_all) > 0:
-                        # 秒數越低越好，其他越高越好
-                        if '秒' in m:
-                            pr = (latest_all > val).mean() * 100
-                        else:
-                            pr = (latest_all < val).mean() * 100
-                        radar_scores.append(pr)
-                        valid_metrics.append(m)
+            # 顯示具體數值表格
+            st.write("---")
+            st.write("**測驗原始紀錄：**")
+            # 這裡你可以手動列出圖片中對應的紀錄欄位
+            display_items = [m for m in PHYSICAL_METRICS + SKILL_METRICS if m in df.columns]
+            st.dataframe(pd.DataFrame(p_latest[display_items]).T)
 
-            if len(valid_metrics) > 2:
-                radar_df = pd.DataFrame({'項目': valid_metrics, 'PR值 (大隊百分等級)': radar_scores})
-                fig_radar = px.line_polar(radar_df, r='PR值 (大隊百分等級)', theta='項目', line_close=True, range_r=[0, 100])
+        with col_radar:
+            # 製作雷達圖（使用分數欄位）
+            # 找出與測驗項目對應的分數欄位
+            radar_cols = [c for c in score_metrics if any(m in c for m in PHYSICAL_METRICS + SKILL_METRICS)]
+            
+            if radar_cols:
+                radar_data = pd.DataFrame({
+                    '項目': radar_cols,
+                    '得分': [p_latest[c] for c in radar_cols]
+                })
+                fig_radar = px.line_polar(radar_data, r='得分', theta='項目', line_close=True)
                 fig_radar.update_traces(fill='toself', line_color='#FF4B4B')
+                fig_radar.update_layout(title=f"{p_name} 體技能分佈")
                 st.plotly_chart(fig_radar, use_container_width=True)
-                st.markdown("<span style='font-size:12px; color:gray;'>*註：雷達圖顯示為 PR 值，100 分代表該項目成績為全大隊第一名。*</span>", unsafe_allow_html=True)
-            else:
-                st.warning("該員有效成績項目不足，無法繪製雷達圖。")
 
-    # --- Tab 4: 自訂警示區 (動態化) ---
-    with tab_alert:
-        ca1, ca2 = st.columns(2)
-        with ca1:
-            st.markdown("##### 🔥 自訂退步監控")
-            reg_m = st.selectbox("監控退步項目：", test_metrics, key='al_r1')
-            reg_val = st.number_input("容許退步空間 (數值)：", value=30 if '秒' in reg_m else 5)
-            
-            if len(all_dates) > 1:
-                d_now = df[df['測驗日期']==all_dates[0]][['姓名', '分隊', reg_m]]
-                d_old = df[df['測驗日期']==all_dates[1]][['姓名', reg_m]]
-                merged = pd.merge(d_now, d_old, on='姓名', suffixes=('_今', '_昨')).dropna()
-                
-                # 自動判斷退步邏輯
-                if '秒' in reg_m:
-                    merged['退步幅度'] = merged[f'{reg_m}_今'] - merged[f'{reg_m}_昨']
-                else:
-                    merged['退步幅度'] = merged[f'{reg_m}_昨'] - merged[f'{reg_m}_今']
-                    
-                regression = merged[merged['退步幅度'] > reg_val].sort_values(by='退步幅度', ascending=False)
-                
-                if not regression.empty:
-                    st.dataframe(regression[['姓名', '分隊', '退步幅度']], hide_index=True, use_container_width=True)
-                else:
-                    st.success("🎉 無人觸發退步警示！")
-            else:
-                st.info("資料不足兩次，無法比對。")
-
-        with ca2:
-            st.markdown("##### ❌ 自訂未達標監控")
-            fail_m = st.selectbox("監控達標項目：", test_metrics, key='al_f1')
-            fail_val = st.number_input("最低標準 (秒數請填上限，次數請填下限)：", value=870 if '秒' in fail_m else 6)
-            
-            # 自動判斷不及格邏輯
-            if '秒' in fail_m:
-                fail_list = df[(df['測驗日期']==latest_date) & (df['姓名'].notna()) & (df[fail_m] > fail_val)]
-            else:
-                fail_list = df[(df['測驗日期']==latest_date) & (df['姓名'].notna()) & (df[fail_m] < fail_val)]
-                
-            if not fail_list.empty:
-                st.dataframe(fail_list[['姓名', '分隊', fail_m]], hide_index=True, use_container_width=True)
-            else:
-                st.success("🎉 全員通過此項目標準！")
 else:
-    st.info("等待讀取資料庫...")
+    st.info("請確認資料庫已正確連線並包含「體能合計40%」、「技能合計60%」等欄位。")
