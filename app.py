@@ -5,12 +5,61 @@ import numpy as np
 
 st.set_page_config(page_title="成功消防大隊 - 體技能儀表板", page_icon="🚒", layout="wide")
 
-st.markdown("""
+#st.markdown("""
     <style>
     [data-testid="stMetricValue"] { font-size: 28px; color: #FF4B4B; }
     .stTabs [data-baseweb="tab-list"] { gap: 24px; }
     .stTabs [data-baseweb="tab"] { height: 50px; font-weight: bold; font-size: 18px; }
     .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 10px; }
+    </style>
+    """, unsafe_allow_html=True)
+    
+st.markdown("""
+    <style>
+    /* 1. 全局數值與卡片樣式 */
+    [data-testid="stMetricValue"] { font-size: 28px; color: #FF4B4B; }
+    .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 10px; }
+
+    /* 2. 重塑 Tab 容器：給予整體一個淺色背景與內距，看起來像按鈕列 */
+    .stTabs [data-baseweb="tab-list"] { 
+        gap: 12px; 
+        background-color: #f8f9fa;
+        padding: 10px;
+        border-radius: 12px;
+    }
+
+    /* 3. 個別 Tab 未選取時的預設按鈕外觀 */
+    .stTabs [data-baseweb="tab"] { 
+        height: 50px; 
+        font-weight: bold; 
+        font-size: 16px; 
+        background-color: #ffffff;
+        border-radius: 8px;
+        padding: 0 20px;
+        color: #555555;
+        border: 1px solid #e0e0e0;
+        transition: all 0.3s ease;
+    }
+
+    /* 4. 滑鼠懸停 (Hover) 時的微亮提示 */
+    .stTabs [data-baseweb="tab"]:hover {
+        background-color: #ffeaea;
+        color: #FF4B4B;
+        border-color: #FF4B4B;
+    }
+
+    /* 5. 被選取的 Tab (Active) 呈現醒目的高光底色 */
+    .stTabs [aria-selected="true"] {
+        background-color: #FF4B4B !important;
+        color: #ffffff !important;
+        border-color: #FF4B4B !important;
+        box-shadow: 0 4px 6px rgba(255, 75, 75, 0.3);
+    }
+    
+    /* 隱藏預設的藍色底線 */
+    .stTabs [data-baseweb="tab-highlight"] {
+        background-color: transparent !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
