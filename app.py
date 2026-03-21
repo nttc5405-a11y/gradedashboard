@@ -22,20 +22,17 @@ def load_and_clean_data():
         url = st.secrets["sheet_url"]
         df = pd.read_csv(url)
         
-        # --- 魔法 1：精準清除底部的空白列 (不再誤刪分數列) ---
-        # 找到最後一個有填寫「姓名」的列索引，再加一列就是該員的分數列
+        # --- 魔法 1：精準清除底部的空白列 ---
         last_valid_idx = df['姓名'].last_valid_index()
         if last_valid_idx is not None:
             df = df.iloc[:last_valid_idx + 2].copy()
             
         df = df.reset_index(drop=True)
         
-        # 測驗日期防呆
         if '測驗日期' not in df.columns:
             df['測驗日期'] = '本次測驗'
             
         # --- 魔法 2：處理向下填滿 (Forward Fill) ---
-        # 將包含特定關鍵字的欄位列為不屬於單項測驗的欄位
         meta_cols = [c for c in df.columns if '合計' in c or '總成績' in c or '備註' in c]
         ffill_cols = ['NO.', '單位', '姓名', '性別', '年齡', '測驗日期'] + meta_cols
         
@@ -43,7 +40,6 @@ def load_and_clean_data():
         df[existing_cols] = df[existing_cols].ffill()
         
         # --- 魔法 3：區分「紀錄」與「分數」 ---
-        # 此時 DataFrame 已經很乾淨，0, 2, 4列絕對是紀錄，1, 3, 5列絕對是分數
         df['資料類型'] = np.where(df.index % 2 == 0, '紀錄', '分數')
         
         # --- 魔法 4：自動抓取「單項測驗項目」 ---
@@ -54,7 +50,6 @@ def load_and_clean_data():
                         and '備註' not in c 
                         and not str(c).startswith('Unnamed')]
         
-        # 轉換數值格式
         numeric_cols = test_metrics + meta_cols + ['年齡']
         for m in numeric_cols:
             if m in df.columns:
@@ -75,13 +70,10 @@ if df is not None and len(test_metrics) > 0:
     all_dates = sorted(df['測驗日期'].dropna().unique(), reverse=True)
     latest_date = all_dates[0] if all_dates else '本次測驗'
     
-    # 拆分資料集
     df_score = df[df['資料類型'] == '分數'].copy()
     df_record = df[df['資料類型'] == '紀錄'].copy()
     
-    # 過濾出「實際有測驗分數」的名單 (避免將空列算入平均)
     df_score_tested = df_score.dropna(subset=test_metrics, how='all')
-    
     analysis_options = test_metrics + [c for c in meta_cols if '備註' not in c]
     
     k1, k2, k3, k4 = st.columns(4)
@@ -92,8 +84,9 @@ if df is not None and len(test_metrics) > 0:
     with k3: st.metric("受測單位數", f"{latest_tested_df['單位'].nunique()} 個")
     with k4: st.metric("最新測驗日期", f"{latest_date}")
 
-    tab_overview, tab_group, tab_individual, tab_alert = st.tabs([
-        "📊 戰情總覽 (分數)", "🔍 交叉分析 (分數)", "🎯 個人雷達 (分數)", "🚨 自訂警示"
+    # 新增第五個 Tab：個人紀錄查詢
+    tab_overview, tab_group, tab_individual, tab_record, tab_alert = st.tabs([
+        "📊 戰情總覽 (分數)", "🔍 交叉分析 (分數)", "🎯 個人雷達 (分數)", "📝 個人紀錄查詢", "🚨 自訂警示"
     ])
 
     # --- Tab 1: 大隊戰情總覽 ---
@@ -139,16 +132,22 @@ if df is not None and len(test_metrics) > 0:
         else:
             st.warning("⚠️ 找不到符合篩選條件的資料，請放寬限制。")
 
-    # --- Tab 3: 個人追蹤儀表 ---
+    # --- Tab 3: 個人追蹤儀表 (雷達圖) ---
     with tab_individual:
+        st.subheader("🎯 個人各項得分 PR 值雷達圖")
+        # 雙層選單：先選單位，再選人
+        sel_c1, sel_c2 = st.columns(2)
+        with sel_c1:
+            radar_unit = st.selectbox("1️⃣ 選擇單位", df['單位'].dropna().unique(), key='radar_unit')
+        with sel_c2:
+            radar_names = df[df['單位'] == radar_unit]['姓名'].dropna().unique()
+            p_name = st.selectbox("2️⃣ 選擇隊員", radar_names, key='radar_name')
+            
         cp1, cp2 = st.columns([1, 2])
         with cp1:
-            p_name = st.selectbox("選擇隊員", df['姓名'].dropna().unique())
-            
             p_scores = df_score[df_score['姓名'] == p_name].sort_values(by='測驗日期', ascending=False)
             p_records = df_record[df_record['姓名'] == p_name].sort_values(by='測驗日期', ascending=False)
             
-            # 加入防呆機制：確保該員確實有紀錄可供讀取
             if not p_scores.empty and not p_records.empty:
                 p_score_latest = p_scores.iloc[0]
                 p_record_latest = p_records.iloc[0]
@@ -159,7 +158,7 @@ if df is not None and len(test_metrics) > 0:
                 if remark_cols and pd.notna(p_score_latest[remark_cols[0]]):
                     st.warning(f"📝 備註事項： {p_score_latest[remark_cols[0]]}")
                 
-                st.write("最新成績明細 (紀錄 / 分數)：")
+                st.write(f"**{latest_date}** 最新明細 (紀錄 / 分數)：")
                 for m in test_metrics:
                     rec_val = p_record_latest[m] if pd.notna(p_record_latest[m]) else "-"
                     score_val = p_score_latest[m] if pd.notna(p_score_latest[m]) else "-"
@@ -190,7 +189,55 @@ if df is not None and len(test_metrics) > 0:
             else:
                 st.error("系統讀取不到該員的分數紀錄。")
 
-    # --- Tab 4: 自訂警示區 ---
+    # --- Tab 4: 新增！個人紀錄查詢 (原始數據) ---
+    with tab_record:
+        st.subheader("📝 個人歷次測驗紀錄查詢 (原始數據：次數 / 秒數)")
+        
+        # 雙層選單
+        rc1, rc2 = st.columns(2)
+        with rc1:
+            rec_unit = st.selectbox("1️⃣ 選擇單位", df['單位'].dropna().unique(), key='rec_unit')
+        with rc2:
+            rec_names = df[df['單位'] == rec_unit]['姓名'].dropna().unique()
+            rec_name = st.selectbox("2️⃣ 選擇隊員", rec_names, key='rec_name')
+            
+        # 撈取該員所有歷次「紀錄」
+        p_records_all = df_record[df_record['姓名'] == rec_name].sort_values(by='測驗日期', ascending=False)
+        
+        if not p_records_all.empty:
+            # 顯示表格
+            display_cols = ['測驗日期'] + test_metrics
+            remark_cols = [c for c in df.columns if '備註' in c]
+            if remark_cols: display_cols += [remark_cols[0]]
+            
+            st.markdown(f"##### 📋 {rec_name} - 歷次成績總表")
+            st.dataframe(p_records_all[display_cols], hide_index=True, use_container_width=True)
+            
+            # 繪製單項趨勢圖
+            st.markdown("##### 📈 單項歷次紀錄趨勢")
+            rec_metric = st.selectbox("請選擇觀測的測驗項目：", test_metrics, key='rec_metric')
+            
+            # 過濾掉空值，並依照時間順序排列以利畫圖
+            plot_data = p_records_all.dropna(subset=[rec_metric]).sort_values(by='測驗日期')
+            
+            if not plot_data.empty:
+                fig_rec = px.line(plot_data, x='測驗日期', y=rec_metric, markers=True, text=rec_metric)
+                fig_rec.update_traces(textposition="top center")
+                
+                # 自動判斷：如果是秒數，Y軸反轉 (越少越上面，代表越好)
+                if '秒' in rec_metric:
+                    fig_rec.update_yaxes(autorange="reversed")
+                    fig_rec.update_layout(title=f"{rec_name} - {rec_metric} 歷次紀錄 (秒數越少越佳)")
+                else:
+                    fig_rec.update_layout(title=f"{rec_name} - {rec_metric} 歷次紀錄 (次數/公分越多越佳)")
+                    
+                st.plotly_chart(fig_rec, use_container_width=True)
+            else:
+                st.info(f"該員尚無 {rec_metric} 的有效測驗紀錄可供繪圖。")
+        else:
+            st.warning("查無該員的紀錄資料。")
+
+    # --- Tab 5: 自訂警示區 ---
     with tab_alert:
         ca1, ca2 = st.columns(2)
         with ca1:
