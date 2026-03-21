@@ -3,17 +3,9 @@ import pandas as pd
 import plotly.express as px
 import numpy as np
 
-st.set_page_config(page_title="成功消防大隊 - 體技能儀表板", page_icon="🚒", layout="wide")
+st.set_page_config(page_title="成功消防大隊 - 戰情室 3.0", page_icon="🚒", layout="wide")
 
-#st.markdown("""
-#    <style>
- #   [data-testid="stMetricValue"] { font-size: 28px; color: #FF4B4B; }
- #   .stTabs [data-baseweb="tab-list"] { gap: 24px; }
- #   .stTabs [data-baseweb="tab"] { height: 50px; font-weight: bold; font-size: 18px; }
- #   .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 10px; }
- #   </style>
- #   """, unsafe_allow_html=True)
-    
+# --- 進階實體按鈕樣式與版面設計 ---
 st.markdown("""
     <style>
     /* 1. 全局數值與卡片樣式 */
@@ -63,7 +55,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🚒 成功消防大隊 - 體技能儀表板")
+st.title("🚒 消防體技能戰情室 3.0 (多大隊擴展版)")
 
 @st.cache_data(ttl=60)
 def load_and_clean_data():
@@ -81,14 +73,16 @@ def load_and_clean_data():
             df['測驗日期'] = '本次測驗'
             
         meta_cols = [c for c in df.columns if '合計' in c or '總成績' in c or '備註' in c]
-        ffill_cols = ['NO.', '單位', '姓名', '性別', '年齡', '測驗日期'] + meta_cols
+        # 新增 '所屬大隊' 進入向下填滿的名單
+        ffill_cols = ['NO.', '所屬大隊', '單位', '姓名', '性別', '年齡', '測驗日期'] + meta_cols
         
         existing_cols = [c for c in ffill_cols if c in df.columns]
         df[existing_cols] = df[existing_cols].ffill()
         
         df['資料類型'] = np.where(df.index % 2 == 0, '紀錄', '分數')
         
-        KNOWN_COLS = ['NO.', '單位', '姓名', '性別', '年齡', '測驗日期', '資料類型', '年齡層']
+        # 新增 '所屬大隊' 進入已知基本欄位名單
+        KNOWN_COLS = ['NO.', '所屬大隊', '單位', '姓名', '性別', '年齡', '測驗日期', '資料類型', '年齡層']
         test_metrics = [c for c in df.columns if c not in KNOWN_COLS 
                         and '合計' not in c 
                         and '總成績' not in c 
@@ -121,63 +115,84 @@ if df is not None and len(test_metrics) > 0:
     df_score_tested = df_score.dropna(subset=test_metrics, how='all')
     analysis_options = test_metrics + [c for c in meta_cols if '備註' not in c]
     
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3, k4, k5 = st.columns(5)
     latest_tested_df = df_score_tested[df_score_tested['測驗日期'] == latest_date]
     
-    with k1: st.metric("本次實際測驗人數", f"{latest_tested_df['姓名'].nunique()} 人")
+    with k1: st.metric("本次受測人數", f"{latest_tested_df['姓名'].nunique()} 人")
     with k2: st.metric("單項測驗數", f"{len(test_metrics)} 項")
-    with k3: st.metric("受測單位數", f"{latest_tested_df['單位'].nunique()} 個")
-    with k4: st.metric("最新測驗日期", f"{latest_date}")
+    with k3: st.metric("參測大隊數", f"{latest_tested_df['所屬大隊'].nunique()} 個")
+    with k4: st.metric("參測分隊數", f"{latest_tested_df['單位'].nunique()} 個")
+    with k5: st.metric("最新測驗日期", f"{latest_date}")
 
     tab_overview, tab_group, tab_individual, tab_record, tab_alert = st.tabs([
         "📊 戰情總覽", "🔍 交叉分析", "🎯 個人雷達", "📝 紀錄查詢", "🚨 預警與進步榜"
     ])
 
-    # --- Tab 1: 大隊戰情總覽 ---
+    # --- Tab 1: 戰情總覽 ---
     with tab_overview:
-        selected_metric = st.selectbox("請選擇觀測項目 (皆呈現換算後的分數)：", analysis_options, key='ov_m')
+        # 新增上方的大隊篩選器，方便長官聚焦特定大隊
+        st.markdown("##### 🔍 觀測設定")
+        oc1, oc2 = st.columns(2)
+        with oc1: selected_metric = st.selectbox("請選擇觀測項目：", analysis_options, key='ov_m')
+        with oc2: target_brigades = st.multiselect("篩選大隊 (留白則顯示全縣)：", df_score_tested['所屬大隊'].dropna().unique())
         
+        # 決定要顯示的資料範圍
+        if target_brigades:
+            ov_df = latest_tested_df[latest_tested_df['所屬大隊'].isin(target_brigades)]
+            trend_df_source = df_score_tested[df_score_tested['所屬大隊'].isin(target_brigades)]
+        else:
+            ov_df = latest_tested_df
+            trend_df_source = df_score_tested
+
         c1, c2 = st.columns(2)
         with c1:
-            avg_df = latest_tested_df.groupby('單位')[selected_metric].mean().reset_index()
-            fig_bar = px.bar(avg_df, x='單位', y=selected_metric, color='單位', text_auto='.1f', 
-                             title=f"各單位 {selected_metric} 平均得分 ({latest_date})")
-            st.plotly_chart(fig_bar, use_container_width=True)
+            if not ov_df.empty:
+                # 把「單位」與「大隊」同時放入，利用大隊來上色分群
+                avg_df = ov_df.groupby(['所屬大隊', '單位'])[selected_metric].mean().reset_index()
+                fig_bar = px.bar(avg_df, x='單位', y=selected_metric, color='所屬大隊', text_auto='.1f', 
+                                 title=f"各單位 {selected_metric} 平均得分 ({latest_date})")
+                st.plotly_chart(fig_bar, use_container_width=True)
+            else:
+                st.info("無相應大隊資料。")
             
         with c2:
-            trend_df = df_score_tested.groupby('測驗日期')[selected_metric].mean().reset_index()
-            # 魔法 1：如果測驗次數不足兩次，自動切換為分數分布直方圖
-            if len(trend_df) > 1:
-                fig_line = px.line(trend_df, x='測驗日期', y=selected_metric, markers=True, 
-                                   title=f"大隊 {selected_metric} 歷次平均得分趨勢")
-                st.plotly_chart(fig_line, use_container_width=True)
-            else:
-                fig_hist = px.histogram(latest_tested_df, x=selected_metric, nbins=10, 
-                                        title=f"大隊 {selected_metric} 得分分布區間 ({latest_date})",
-                                        color_discrete_sequence=['#FF4B4B'])
-                fig_hist.update_layout(yaxis_title="人數")
-                st.plotly_chart(fig_hist, use_container_width=True)
+            if not trend_df_source.empty:
+                trend_df = trend_df_source.groupby('測驗日期')[selected_metric].mean().reset_index()
+                if len(trend_df) > 1:
+                    fig_line = px.line(trend_df, x='測驗日期', y=selected_metric, markers=True, 
+                                       title=f"選定範圍之 {selected_metric} 歷次平均趨勢")
+                    st.plotly_chart(fig_line, use_container_width=True)
+                else:
+                    fig_hist = px.histogram(ov_df, x=selected_metric, nbins=10, 
+                                            title=f"選定範圍之 {selected_metric} 得分分布 ({latest_date})",
+                                            color_discrete_sequence=['#FF4B4B'])
+                    fig_hist.update_layout(yaxis_title="人數")
+                    st.plotly_chart(fig_hist, use_container_width=True)
 
     # --- Tab 2: 族群交叉分析 ---
     with tab_group:
-        st.subheader("🕵️ 多維度族群交叉篩選 (分析得分分布)")
-        f1, f2, f3, f4, f5 = st.columns(5)
-        
+        st.subheader("🕵️ 多維度族群交叉篩選")
+        # 改為兩列，視覺更寬敞
+        f1, f2, f3 = st.columns(3)
         with f1: s_date = st.multiselect("測驗日期", all_dates, default=[latest_date])
-        with f2: s_gen = st.multiselect("性別", df_score_tested['性別'].dropna().unique(), default=df_score_tested['性別'].dropna().unique().tolist())
-        with f3: s_age = st.multiselect("年齡層", df_score_tested['年齡層'].dropna().unique().tolist(), default=df_score_tested['年齡層'].dropna().unique().tolist())
+        with f2: s_brigade = st.multiselect("所屬大隊", df_score_tested['所屬大隊'].dropna().unique(), default=df_score_tested['所屬大隊'].dropna().unique().tolist())
+        with f3: s_met = st.selectbox("分析項目", analysis_options, key='gr_m')
+        
+        f4, f5, f6 = st.columns(3)
         with f4: s_team = st.multiselect("單位", df_score_tested['單位'].dropna().unique(), default=df_score_tested['單位'].dropna().unique().tolist())
-        with f5: s_met = st.selectbox("分析項目", analysis_options, key='gr_m')
+        with f5: s_gen = st.multiselect("性別", df_score_tested['性別'].dropna().unique(), default=df_score_tested['性別'].dropna().unique().tolist())
+        with f6: s_age = st.multiselect("年齡層", df_score_tested['年齡層'].dropna().unique().tolist(), default=df_score_tested['年齡層'].dropna().unique().tolist())
         
         filtered = df_score_tested[
             (df_score_tested['測驗日期'].isin(s_date)) & 
+            (df_score_tested['所屬大隊'].isin(s_brigade)) & 
+            (df_score_tested['單位'].isin(s_team)) & 
             (df_score_tested['性別'].isin(s_gen)) & 
-            (df_score_tested['年齡層'].isin(s_age)) & 
-            (df_score_tested['單位'].isin(s_team))
+            (df_score_tested['年齡層'].isin(s_age))
         ]
         
         if not filtered.empty:
-            fig_box = px.box(filtered, x="單位", y=s_met, color="性別", points="all", hover_data=['姓名', '測驗日期'])
+            fig_box = px.box(filtered, x="單位", y=s_met, color="所屬大隊", points="all", hover_data=['姓名', '測驗日期'])
             st.plotly_chart(fig_box, use_container_width=True)
             st.info(f"📌 此條件下共篩選出 {len(filtered)} 筆有效得分紀錄。")
         else:
@@ -186,98 +201,107 @@ if df is not None and len(test_metrics) > 0:
     # --- Tab 3: 個人追蹤儀表 (雷達圖) ---
     with tab_individual:
         st.subheader("🎯 個人得分 PR 值雷達圖與常模對比")
-        sel_c1, sel_c2 = st.columns(2)
+        # 三層連動選單
+        sel_c1, sel_c2, sel_c3 = st.columns(3)
         with sel_c1:
-            radar_unit = st.selectbox("1️⃣ 選擇單位", df['單位'].dropna().unique(), key='radar_unit')
+            radar_brigades = df['所屬大隊'].dropna().unique()
+            radar_brigade = st.selectbox("1️⃣ 選擇大隊", radar_brigades, key='radar_brigade')
         with sel_c2:
-            radar_names = df[df['單位'] == radar_unit]['姓名'].dropna().unique()
-            p_name = st.selectbox("2️⃣ 選擇隊員", radar_names, key='radar_name')
+            radar_units = df[df['所屬大隊'] == radar_brigade]['單位'].dropna().unique()
+            radar_unit = st.selectbox("2️⃣ 選擇單位", radar_units, key='radar_unit')
+        with sel_c3:
+            radar_names = df[(df['所屬大隊'] == radar_brigade) & (df['單位'] == radar_unit)]['姓名'].dropna().unique()
+            p_name = st.selectbox("3️⃣ 選擇隊員", radar_names, key='radar_name')
             
         cp1, cp2 = st.columns([1, 2])
-        with cp1:
-            p_scores = df_score[df_score['姓名'] == p_name].sort_values(by='測驗日期', ascending=False)
-            p_records = df_record[df_record['姓名'] == p_name].sort_values(by='測驗日期', ascending=False)
-            
-            if not p_scores.empty and not p_records.empty:
-                p_score_latest = p_scores.iloc[0]
-                p_record_latest = p_records.iloc[0]
-                p_age_group = p_score_latest['年齡層']
+        if p_name:
+            with cp1:
+                p_scores = df_score[df_score['姓名'] == p_name].sort_values(by='測驗日期', ascending=False)
+                p_records = df_record[df_record['姓名'] == p_name].sort_values(by='測驗日期', ascending=False)
                 
-                st.info(f"姓名： {p_score_latest['姓名']} | 單位： {p_score_latest['單位']} | 年齡層： {p_age_group}")
-                
-                # 魔法 2：計算同齡層常模平均
-                age_group_df = latest_tested_df[latest_tested_df['年齡層'] == p_age_group]
-                
-                st.write(f"**{latest_date}** 最新明細 (紀錄 / 分數)：")
-                for m in test_metrics:
-                    rec_val = p_record_latest[m] if pd.notna(p_record_latest[m]) else "-"
-                    score_val = p_score_latest[m] if pd.notna(p_score_latest[m]) else "-"
+                if not p_scores.empty and not p_records.empty:
+                    p_score_latest = p_scores.iloc[0]
+                    p_record_latest = p_records.iloc[0]
+                    p_age_group = p_score_latest['年齡層']
                     
-                    # 取出同齡平均分數
-                    age_avg = age_group_df[m].mean() if not age_group_df.empty else None
-                    age_avg_text = f" | 同齡平均: {age_avg:.1f}分" if age_avg and pd.notna(age_avg) else ""
+                    st.info(f"姓名： {p_score_latest['姓名']} | 單位： {p_score_latest['所屬大隊']} - {p_score_latest['單位']} | 年齡層： {p_age_group}")
                     
-                    st.write(f"- **{m}**： {rec_val} / 得 {score_val} 分 <span style='color:gray; font-size:14px;'>{age_avg_text}</span>", unsafe_allow_html=True)
+                    age_group_df = latest_tested_df[latest_tested_df['年齡層'] == p_age_group]
                     
-        with cp2:
-            if not p_scores.empty:
-                radar_scores = []
-                valid_metrics = []
-                
-                for m in test_metrics:
-                    val = p_score_latest[m]
-                    if pd.notna(val):
-                        latest_all = latest_tested_df[m].dropna()
-                        if len(latest_all) > 0:
-                            pr = (latest_all <= val).mean() * 100
-                            radar_scores.append(pr)
-                            valid_metrics.append(m)
+                    st.write(f"**{latest_date}** 最新明細 (紀錄 / 分數)：")
+                    for m in test_metrics:
+                        rec_val = p_record_latest[m] if pd.notna(p_record_latest[m]) else "-"
+                        score_val = p_score_latest[m] if pd.notna(p_score_latest[m]) else "-"
+                        
+                        age_avg = age_group_df[m].mean() if not age_group_df.empty else None
+                        age_avg_text = f" | 同齡平均: {age_avg:.1f}分" if age_avg and pd.notna(age_avg) else ""
+                        
+                        st.write(f"- **{m}**： {rec_val} / 得 {score_val} 分 <span style='color:gray; font-size:14px;'>{age_avg_text}</span>", unsafe_allow_html=True)
+                        
+            with cp2:
+                if not p_scores.empty:
+                    radar_scores = []
+                    valid_metrics = []
+                    
+                    for m in test_metrics:
+                        val = p_score_latest[m]
+                        if pd.notna(val):
+                            latest_all = latest_tested_df[m].dropna()
+                            if len(latest_all) > 0:
+                                pr = (latest_all <= val).mean() * 100
+                                radar_scores.append(pr)
+                                valid_metrics.append(m)
 
-                if len(valid_metrics) > 2:
-                    radar_df = pd.DataFrame({'項目': valid_metrics, 'PR值 (大隊百分等級)': radar_scores})
-                    fig_radar = px.line_polar(radar_df, r='PR值 (大隊百分等級)', theta='項目', line_close=True, range_r=[0, 100])
-                    fig_radar.update_traces(fill='toself', line_color='#1E90FF')
-                    fig_radar.update_layout(polar=dict(radialaxis=dict(showticklabels=False))) # 隱藏雷達圖雜亂刻度
-                    st.plotly_chart(fig_radar, use_container_width=True)
-                else:
-                    st.warning("該員有效成績項目不足，無法繪製雷達圖。")
+                    if len(valid_metrics) > 2:
+                        radar_df = pd.DataFrame({'項目': valid_metrics, 'PR值 (全縣百分等級)': radar_scores})
+                        fig_radar = px.line_polar(radar_df, r='PR值 (全縣百分等級)', theta='項目', line_close=True, range_r=[0, 100])
+                        fig_radar.update_traces(fill='toself', line_color='#1E90FF')
+                        fig_radar.update_layout(polar=dict(radialaxis=dict(showticklabels=False))) 
+                        st.plotly_chart(fig_radar, use_container_width=True)
+                    else:
+                        st.warning("該員有效成績項目不足，無法繪製雷達圖。")
 
     # --- Tab 4: 個人紀錄查詢 ---
     with tab_record:
         st.subheader("📝 個人歷次測驗紀錄查詢 (原始數據：次數 / 秒數)")
-        rc1, rc2 = st.columns(2)
-        with rc1: rec_unit = st.selectbox("1️⃣ 選擇單位", df['單位'].dropna().unique(), key='rec_unit')
+        # 三層連動選單
+        rc1, rc2, rc3 = st.columns(3)
+        with rc1: rec_brigade = st.selectbox("1️⃣ 選擇大隊", df['所屬大隊'].dropna().unique(), key='rec_brigade')
         with rc2: 
-            rec_names = df[df['單位'] == rec_unit]['姓名'].dropna().unique()
-            rec_name = st.selectbox("2️⃣ 選擇隊員", rec_names, key='rec_name')
+            rec_units = df[df['所屬大隊'] == rec_brigade]['單位'].dropna().unique()
+            rec_unit = st.selectbox("2️⃣ 選擇單位", rec_units, key='rec_unit')
+        with rc3:
+            rec_names = df[(df['所屬大隊'] == rec_brigade) & (df['單位'] == rec_unit)]['姓名'].dropna().unique()
+            rec_name = st.selectbox("3️⃣ 選擇隊員", rec_names, key='rec_name')
             
-        p_records_all = df_record[df_record['姓名'] == rec_name].sort_values(by='測驗日期', ascending=False)
-        
-        if not p_records_all.empty:
-            display_cols = ['測驗日期'] + test_metrics
-            st.markdown(f"##### 📋 {rec_name} - 歷次成績總表")
-            st.dataframe(p_records_all[display_cols], hide_index=True, use_container_width=True)
+        if rec_name:
+            p_records_all = df_record[df_record['姓名'] == rec_name].sort_values(by='測驗日期', ascending=False)
             
-            st.markdown("##### 📈 單項歷次紀錄趨勢")
-            rec_metric = st.selectbox("請選擇觀測的測驗項目：", test_metrics, key='rec_metric')
-            plot_data = p_records_all.dropna(subset=[rec_metric]).sort_values(by='測驗日期')
-            
-            if not plot_data.empty:
-                fig_rec = px.line(plot_data, x='測驗日期', y=rec_metric, markers=True, text=rec_metric)
-                fig_rec.update_traces(textposition="top center")
+            if not p_records_all.empty:
+                display_cols = ['測驗日期'] + test_metrics
+                st.markdown(f"##### 📋 {rec_name} - 歷次成績總表")
+                st.dataframe(p_records_all[display_cols], hide_index=True, use_container_width=True)
                 
-                if '秒' in rec_metric:
-                    fig_rec.update_yaxes(autorange="reversed")
-                    fig_rec.update_layout(title=f"{rec_name} - {rec_metric} 歷次紀錄 (秒數越少越佳)")
+                st.markdown("##### 📈 單項歷次紀錄趨勢")
+                rec_metric = st.selectbox("請選擇觀測的測驗項目：", test_metrics, key='rec_metric_sel')
+                plot_data = p_records_all.dropna(subset=[rec_metric]).sort_values(by='測驗日期')
+                
+                if not plot_data.empty:
+                    fig_rec = px.line(plot_data, x='測驗日期', y=rec_metric, markers=True, text=rec_metric)
+                    fig_rec.update_traces(textposition="top center")
+                    
+                    if '秒' in rec_metric:
+                        fig_rec.update_yaxes(autorange="reversed")
+                        fig_rec.update_layout(title=f"{rec_name} - {rec_metric} 歷次紀錄 (秒數越少越佳)")
+                    else:
+                        fig_rec.update_layout(title=f"{rec_name} - {rec_metric} 歷次紀錄 (次數/公分越多越佳)")
+                    st.plotly_chart(fig_rec, use_container_width=True)
                 else:
-                    fig_rec.update_layout(title=f"{rec_name} - {rec_metric} 歷次紀錄 (次數/公分越多越佳)")
-                st.plotly_chart(fig_rec, use_container_width=True)
-            else:
-                st.info(f"該員尚無 {rec_metric} 的測驗紀錄。")
+                    st.info(f"該員尚無 {rec_metric} 的測驗紀錄。")
 
     # --- Tab 5: 預警與進步榜 ---
     with tab_alert:
-        ca1, ca2, ca3 = st.columns(3) # 切成三欄，加入進步榜
+        ca1, ca2, ca3 = st.columns(3)
         
         with ca1:
             st.markdown("##### ❌ 自訂未達標監控")
@@ -286,8 +310,7 @@ if df is not None and len(test_metrics) > 0:
             
             fail_list = latest_tested_df[latest_tested_df[fail_m] < fail_val]
             if not fail_list.empty:
-                # 魔法 3：紅燈警示 (套用 pandas style)
-                st.dataframe(fail_list[['姓名', '單位', fail_m]].style.map(
+                st.dataframe(fail_list[['所屬大隊', '單位', '姓名', fail_m]].style.map(
                     lambda x: 'background-color: #ffcccc; color: black;' if isinstance(x, (int, float)) and x < fail_val else '', subset=[fail_m]
                 ), hide_index=True, use_container_width=True)
             else:
@@ -299,7 +322,7 @@ if df is not None and len(test_metrics) > 0:
             reg_val = st.number_input("容許退步空間 (減少幾分)：", value=10)
             
             if len(all_dates) > 1:
-                d_now = latest_tested_df[['姓名', '單位', reg_m]]
+                d_now = latest_tested_df[['所屬大隊', '單位', '姓名', reg_m]]
                 d_old = df_score_tested[df_score_tested['測驗日期']==all_dates[1]][['姓名', reg_m]]
                 merged = pd.merge(d_now, d_old, on='姓名', suffixes=('_今', '_昨')).dropna()
                 
@@ -307,7 +330,7 @@ if df is not None and len(test_metrics) > 0:
                 regression = merged[merged['退步幅度'] > reg_val].sort_values(by='退步幅度', ascending=False)
                 
                 if not regression.empty:
-                    st.dataframe(regression[['姓名', '單位', '退步幅度']], hide_index=True, use_container_width=True)
+                    st.dataframe(regression[['所屬大隊', '單位', '姓名', '退步幅度']], hide_index=True, use_container_width=True)
                 else:
                     st.success("🎉 無人觸發退步警示！")
             else:
@@ -319,8 +342,7 @@ if df is not None and len(test_metrics) > 0:
             prog_val = st.number_input("顯示進步超過幾分：", value=5)
             
             if len(all_dates) > 1:
-                # 魔法 4：計算進步幅度
-                d_now = latest_tested_df[['姓名', '單位', prog_m]]
+                d_now = latest_tested_df[['所屬大隊', '單位', '姓名', prog_m]]
                 d_old = df_score_tested[df_score_tested['測驗日期']==all_dates[1]][['姓名', prog_m]]
                 merged = pd.merge(d_now, d_old, on='姓名', suffixes=('_今', '_昨')).dropna()
                 
@@ -328,8 +350,7 @@ if df is not None and len(test_metrics) > 0:
                 progress = merged[merged['進步幅度'] >= prog_val].sort_values(by='進步幅度', ascending=False)
                 
                 if not progress.empty:
-                    # 綠燈表揚
-                    st.dataframe(progress[['姓名', '單位', '進步幅度']].style.map(
+                    st.dataframe(progress[['所屬大隊', '單位', '姓名', '進步幅度']].style.map(
                         lambda x: 'background-color: #ccffcc; color: black;' if isinstance(x, (int, float)) and x >= prog_val else '', subset=['進步幅度']
                     ), hide_index=True, use_container_width=True)
                 else:
