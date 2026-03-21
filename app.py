@@ -3,9 +3,10 @@ import pandas as pd
 import plotly.express as px
 import numpy as np
 
+# --- 頁面基本設定 ---
 st.set_page_config(page_title="成功消防大隊 - 戰情室 3.0", page_icon="🚒", layout="wide")
 
-# 強制自訂 CSS 樣式
+# 自訂 CSS 樣式
 st.markdown("""
     <style>
     [data-testid="stMetricValue"] { font-size: 28px; color: #FF4B4B; }
@@ -15,128 +16,125 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🚒 成功消防大隊 - 體技能戰情室 3.0 (測驗表同步版)")
+st.title("🚒 成功消防大隊 - 體技能戰情室 3.0 (自動合併版)")
 
-# --- 根據圖片定義欄位結構 ---
-# 基本資料
-BASE_COLS = ['測驗日期', '分隊', '姓名', '性別', '年齡']
-
-# 體能項目 (40%)
-PHYSICAL_METRICS = [
-    '立定跳遠', '後拋擲遠', '6公尺30秒折返跑', 
-    '菱形槓硬舉', '懸吊屈體', '負重行走', '1500公尺跑走'
-]
-
-# 技能項目 (60%)
-SKILL_METRICS = [
-    '結索能力', '繩索登降', '固定點架設', 
-    '滑輪拖拉架設', '緊繃繩系統架設'
-]
-
-# 總分項目
-TOTAL_METRICS = ['體能合計40%', '技能合計60%', '總成績']
-
+# --- 1. 資料讀取與清洗邏輯 (處理兩列合併) ---
 @st.cache_data(ttl=60)
 def load_and_clean_data():
     try:
         url = st.secrets["sheet_url"]
-        df = pd.read_csv(url)
+        # 讀取 CSV (預設讀取第一個分頁)
+        raw_df = pd.read_csv(url)
         
-        # 處理「分數部分在奇數列」的邏輯：
-        # 如果你的 CSV 結構是 [項目1_紀錄, 項目1_分數, 項目2_紀錄, 項目2_分數...]
-        # 我們通常會分析「分數」來做圖表，分析「紀錄」來查看個人細節
+        # 過濾掉完全空白的行，確保資料連續
+        raw_df = raw_df.dropna(subset=['單位'], how='all').reset_index(drop=True)
+
+        # 分離「紀錄列」(偶數索引 0, 2, 4...) 與 「分數列」(奇數索引 1, 3, 5...)
+        # 根據圖片，紀錄在第一列，分數在第二列
+        data_rows = raw_df.iloc[::2].reset_index(drop=True)
+        score_rows = raw_df.iloc[1::2].reset_index(drop=True)
+
+        # 定義哪些是基本資料欄位 (不參與分數運算)
+        base_info_cols = ['NO.', '單位', '姓名', '性別', '年齡']
         
-        all_cols = df.columns.tolist()
+        # 找出所有的測驗項目欄位
+        test_cols = [c for c in data_rows.columns if c not in base_info_cols and '備註' not in c and '名次' not in c]
+
+        # 為了避免合併後名稱混淆，將分數列的欄位加上 "_分數" 字樣
+        # 但保留「合計」與「總成績」這類關鍵字
+        renamed_scores = {}
+        for col in test_cols:
+            if '合計' in col or '成績' in col:
+                renamed_scores[col] = col # 保持原名
+            else:
+                renamed_scores[col] = f"{col}_分數"
         
-        # 將所有數值欄位轉為數字
-        numeric_cols = [c for c in all_cols if c not in BASE_COLS]
+        score_rows_renamed = score_rows[test_cols].rename(columns=renamed_scores)
+
+        # 橫向合併：[基本資料 + 原始紀錄] + [重新命名的分數]
+        df = pd.concat([data_rows, score_rows_renamed], axis=1)
+
+        # 清理資料：轉為數字
+        numeric_cols = [c for c in df.columns if c not in base_info_cols and '備註' not in c]
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # 新增年齡層
+
+        # 建立年齡層
         bins = [20, 30, 40, 50, 70]
         labels = ['20-29歲', '30-39歲', '40-49歲', '50歲以上']
         df['年齡層'] = pd.cut(df['年齡'], bins=bins, labels=labels, right=False)
         
-        return df, numeric_cols
+        # 篩選出圖表要用的「分數型」欄位清單
+        score_metrics = [c for c in df.columns if '_分數' in c or '合計' in c or '總成績' in c]
+
+        return df, score_metrics, test_cols
     except Exception as e:
-        st.error(f"資料讀取失敗：{e}")
-        return None, []
+        st.error(f"資料處理失敗，請確認表格格式是否正確。錯誤訊息：{e}")
+        return None, [], []
 
-df, all_metrics = load_and_clean_data()
+df, score_metrics, record_metrics = load_and_clean_data()
 
+# --- 2. 介面呈現 ---
 if df is not None:
-    # 這裡自動偵測你的 CSV 中哪些是「分數」欄位
-    # 假設分數欄位名稱包含 "分數" 字樣，或你提到的奇數索引邏輯
-    score_metrics = [m for m in all_metrics if "分數" in m or "合計" in m or "成績" in m]
-    if not score_metrics: # 如果 CSV 沒寫分數兩字，就用全部項目
-        score_metrics = all_metrics
-
-    all_dates = sorted(df['測驗日期'].unique(), reverse=True)
-    latest_date = all_dates[0]
-    
-    # 頂部 Kpi
+    # 頂部儀表板資訊
     k1, k2, k3, k4 = st.columns(4)
-    with k1: st.metric("本次測驗總人數", f"{len(df[df['測驗日期']==latest_date])} 人")
-    with k2: 
-        top_scorer = df[df['測驗日期']==latest_date].sort_values(by='總成績', ascending=False).iloc[0]
-        st.metric("本次最高分", f"{top_scorer['總成績']}", f"🏆 {top_scorer['姓名']}")
-    with k3: st.metric("受測分隊數", f"{df['分隊'].nunique()} 個")
-    with k4: st.metric("最新測驗日期", f"{latest_date}")
+    with k1: st.metric("受測總人數", f"{len(df)} 人")
+    with k2: st.metric("測驗項目數", f"{len(record_metrics)} 項")
+    with k3: st.metric("受測單位數", f"{df['單位'].nunique()} 個")
+    with k4: 
+        avg_total = df['總成績'].mean()
+        st.metric("大隊平均分", f"{avg_total:.1f}")
 
-    tab_overview, tab_group, tab_individual, tab_alert = st.tabs([
-        "📊 戰情總覽", "🔍 交叉分析", "🎯 個人雷達", "🚨 警示名單"
+    tab_overview, tab_individual, tab_ranking = st.tabs([
+        "📊 大隊總覽", "🎯 個人分析", "🏆 成績排行"
     ])
 
-    # --- Tab 1: 大隊戰情總覽 ---
+    # --- Tab 1: 大隊分析 ---
     with tab_overview:
-        selected_metric = st.selectbox("請選擇觀測指標（分數）：", score_metrics)
+        selected_m = st.selectbox("選擇分析項目（分數）：", score_metrics, index=len(score_metrics)-1)
         
         c1, c2 = st.columns(2)
         with c1:
-            latest_df = df[df['測驗日期'] == latest_date]
-            avg_df = latest_df.groupby('分隊')[selected_metric].mean().reset_index()
-            fig_bar = px.bar(avg_df, x='分隊', y=selected_metric, color='分隊', text_auto='.1f', 
-                             title=f"各分隊 {selected_metric} 平均表現")
+            avg_df = df.groupby('單位')[selected_m].mean().reset_index().sort_values(by=selected_m, ascending=False)
+            fig_bar = px.bar(avg_df, x='單位', y=selected_m, color='單位', text_auto='.1f', title=f"各單位 {selected_m} 平均表現")
             st.plotly_chart(fig_bar, use_container_width=True)
         with c2:
-            trend_df = df.groupby('測驗日期')[selected_metric].mean().reset_index()
-            fig_line = px.line(trend_df, x='測驗日期', y=selected_metric, markers=True, title=f"大隊 {selected_metric} 歷次趨勢")
-            st.plotly_chart(fig_line, use_container_width=True)
+            fig_box = px.box(df, x='單位', y=selected_m, color='性別', points="all", hover_data=['姓名'], title=f"{selected_m} 分數分佈")
+            st.plotly_chart(fig_box, use_container_width=True)
 
-    # --- Tab 3: 個人雷達圖 (依照圖片區分體能與技能) ---
+    # --- Tab 2: 個人雷達圖與明細 ---
     with tab_individual:
-        p_name = st.selectbox("選擇隊員", df['姓名'].unique())
-        p_latest = df[(df['姓名'] == p_name) & (df['測驗日期'] == latest_date)].iloc[0]
-        
-        col_info, col_radar = st.columns([1, 2])
-        with col_info:
-            st.info(f"**{p_latest['姓名']}** ({p_latest['分隊']})")
-            st.write(f"🔹 **總成績：{p_latest['總成績']}**")
-            st.write(f"🔹 體能合計(40%)：{p_latest.get('體能合計40%', 'N/A')}")
-            st.write(f"🔹 技能合計(60%)：{p_latest.get('技能合計60%', 'N/A')}")
+        col_sel, col_graph = st.columns([1, 2])
+        with col_sel:
+            p_name = st.selectbox("搜尋隊員姓名", df['姓名'].unique())
+            person = df[df['姓名'] == p_name].iloc[0]
+            st.info(f"**姓名：** {person['姓名']}  \n**單位：** {person['單位']}  \n**總成績：** {person['總成績']}")
             
-            # 顯示具體數值表格
-            st.write("---")
-            st.write("**測驗原始紀錄：**")
-            # 這裡你可以手動列出圖片中對應的紀錄欄位
-            display_items = [m for m in PHYSICAL_METRICS + SKILL_METRICS if m in df.columns]
-            st.dataframe(pd.DataFrame(p_latest[display_items]).T)
+            # 顯示原始紀錄小表格
+            st.write("**原始測驗紀錄：**")
+            rec_df = pd.DataFrame({
+                "項目": record_metrics,
+                "紀錄": [person[m] for m in record_metrics]
+            })
+            st.dataframe(rec_df, hide_index=True)
 
-        with col_radar:
-            # 製作雷達圖（使用分數欄位）
-            # 找出與測驗項目對應的分數欄位
-            radar_cols = [c for c in score_metrics if any(m in c for m in PHYSICAL_METRICS + SKILL_METRICS)]
-            
-            if radar_cols:
-                radar_data = pd.DataFrame({
-                    '項目': radar_cols,
-                    '得分': [p_latest[c] for c in radar_cols]
-                })
-                fig_radar = px.line_polar(radar_data, r='得分', theta='項目', line_close=True)
-                fig_radar.update_traces(fill='toself', line_color='#FF4B4B')
-                fig_radar.update_layout(title=f"{p_name} 體技能分佈")
-                st.plotly_chart(fig_radar, use_container_width=True)
+        with col_graph:
+            # 製作雷達圖（僅選取單項分數，不含合計項）
+            radar_items = [m for m in score_metrics if '_分數' in m]
+            radar_df = pd.DataFrame({
+                "項目": [m.replace('_分數', '') for m in radar_items],
+                "分數": [person[m] for m in radar_items]
+            })
+            fig_radar = px.line_polar(radar_df, r='分數', theta='項目', line_close=True, range_r=[0, 100])
+            fig_radar.update_traces(fill='toself', line_color='#FF4B4B')
+            fig_radar.update_layout(title=f"{p_name} 體技能分佈圖")
+            st.plotly_chart(fig_radar, use_container_width=True)
+
+    # --- Tab 3: 排行榜 ---
+    with tab_ranking:
+        st.subheader("🏆 全大隊成績總表")
+        display_df = df[['單位', '姓名', '年齡', '體能合計40%', '技能合計60%', '總成績']].sort_values(by='總成績', ascending=False)
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 else:
-    st.info("請確認資料庫已正確連線並包含「體能合計40%」、「技能合計60%」等欄位。")
+    st.warning("請確認 Google Sheet 已發佈為 CSV，且網址已正確放入 Secrets 中。")
