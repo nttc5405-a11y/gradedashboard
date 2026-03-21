@@ -63,6 +63,13 @@ def load_and_clean_data():
         url = st.secrets["sheet_url"]
         df = pd.read_csv(url)
         
+        # --- 防呆魔法 A：自動清除所有欄位名稱前後的不小心輸入的空白 ---
+        df.columns = df.columns.str.strip()
+        
+        # --- 防呆魔法 B：如果還是沒抓到，先給一個預設值避免系統崩潰 ---
+        if '所屬大隊' not in df.columns:
+            df['所屬大隊'] = '預設大隊'
+            
         last_valid_idx = df['姓名'].last_valid_index()
         if last_valid_idx is not None:
             df = df.iloc[:last_valid_idx + 2].copy()
@@ -73,15 +80,13 @@ def load_and_clean_data():
             df['測驗日期'] = '本次測驗'
             
         meta_cols = [c for c in df.columns if '合計' in c or '總成績' in c or '備註' in c]
-        # 新增 '所屬大隊' 進入向下填滿的名單
-        ffill_cols = ['NO.', '所屬大隊', '單位', '姓名', '性別', '年齡', '測驗日期'] + meta_cols
         
+        ffill_cols = ['NO.', '所屬大隊', '單位', '姓名', '性別', '年齡', '測驗日期'] + meta_cols
         existing_cols = [c for c in ffill_cols if c in df.columns]
         df[existing_cols] = df[existing_cols].ffill()
         
         df['資料類型'] = np.where(df.index % 2 == 0, '紀錄', '分數')
         
-        # 新增 '所屬大隊' 進入已知基本欄位名單
         KNOWN_COLS = ['NO.', '所屬大隊', '單位', '姓名', '性別', '年齡', '測驗日期', '資料類型', '年齡層']
         test_metrics = [c for c in df.columns if c not in KNOWN_COLS 
                         and '合計' not in c 
