@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import numpy as np
 
-st.set_page_config(page_title="成功消防大隊 - 戰情室 3.0", page_icon="🚒", layout="wide")
+st.set_page_config(page_title="成功消防大隊 - 體技能儀表板 3.0", page_icon="🚒", layout="wide")
 
 # --- 進階實體按鈕樣式與版面設計 ---
 st.markdown("""
@@ -55,7 +55,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🚒 消防體技能戰情室 3.0 (多大隊擴展版)")
+st.title("🚒 消防體技能儀表板")
 
 @st.cache_data(ttl=60)
 def load_and_clean_data():
