@@ -60,7 +60,11 @@ st.title("🚒 消防體技能儀表板")
 @st.cache_data(ttl=60)
 def load_and_clean_data():
     try:
-        url = st.secrets["https://docs.google.com/spreadsheets/d/e/2PACX-1vQcsv0lMJmU68FYuyXRY6H4T9j9j8xgaC9xnSWwrCGbSuqACG1geXM34e-nvimhVQ/pub?gid=1434005373&single=true&output=csv"]
+        # 直接把網址設為字串變數，不要包在 st.secrets 裡面
+sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQcsv0lMJmU68FYuyXRY6H4T9j9j8xgaC9xnSWwrCGbSuqACG1geXM34e-nvimhVQ/pub?gid=1434005373&single=true&output=csv"
+
+# 直接讀取
+df = pd.read_csv(sheet_url)
         
         # 1. 略過最上方第一行的合併大標題
         raw_df = pd.read_csv(url, header=None, skiprows=1)
