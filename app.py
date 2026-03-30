@@ -36,7 +36,6 @@ def load_and_clean_data():
             if m.startswith('Unnamed') or m == 'nan': m = ''
             if s.startswith('Unnamed') or s == 'nan': s = ''
             
-            # 【修復重點1】避免表頭合併造成「基本資料_姓名」這種找不到欄位的狀況
             if any(keyword in s for keyword in ['姓名', '大隊', '分隊', '單位', '性別', '年齡', '日期']):
                 new_cols.append(s)
             elif m and s and m != s:
@@ -50,7 +49,9 @@ def load_and_clean_data():
         df.columns = new_cols
         df = df.reset_index(drop=True)
         
-        # 【修復重點2】自動校正欄位名稱
+        # 🚀 【關鍵修復】剔除重複的欄位名稱！這是讓交叉分析能順利畫圖的關鍵
+        df = df.loc[:, ~df.columns.duplicated()]
+        
         rename_map = {}
         for c in df.columns:
             c_str = str(c)
@@ -60,7 +61,6 @@ def load_and_clean_data():
                 rename_map[c] = '單位'
         df = df.rename(columns=rename_map)
         
-        # 【修復重點3】強制補齊 UI 依賴的必要欄位，防止程式崩潰
         if '所屬大隊' not in df.columns: df['所屬大隊'] = '未提供'
         if '單位' not in df.columns: df['單位'] = '未提供'
         if '性別' not in df.columns: df['性別'] = '未提供'
@@ -69,7 +69,7 @@ def load_and_clean_data():
         if '姓名' in df.columns:
             df = df.dropna(subset=['姓名'])
         else:
-            df['姓名'] = '未具名' # 極端狀況保護
+            df['姓名'] = '未具名'
         
         score_cols = [c for c in df.columns if str(c).endswith('_成績')]
         test_metrics = [c.replace('_成績', '') for c in score_cols]
