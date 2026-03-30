@@ -8,50 +8,13 @@ st.set_page_config(page_title="成功消防大隊 - 體技能儀表板 3.0", pag
 # --- 進階實體按鈕樣式與版面設計 ---
 st.markdown("""
     <style>
-    /* 1. 全局數值與卡片樣式 */
     [data-testid="stMetricValue"] { font-size: 28px; color: #FF4B4B; }
     .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 10px; }
-
-    /* 2. 重塑 Tab 容器：給予整體一個淺色背景與內距，看起來像按鈕列 */
-    .stTabs [data-baseweb="tab-list"] { 
-        gap: 12px; 
-        background-color: #f8f9fa;
-        padding: 10px;
-        border-radius: 12px;
-    }
-
-    /* 3. 個別 Tab 未選取時的預設按鈕外觀 */
-    .stTabs [data-baseweb="tab"] { 
-        height: 50px; 
-        font-weight: bold; 
-        font-size: 16px; 
-        background-color: #ffffff;
-        border-radius: 8px;
-        padding: 0 20px;
-        color: #555555;
-        border: 1px solid #e0e0e0;
-        transition: all 0.3s ease;
-    }
-
-    /* 4. 滑鼠懸停 (Hover) 時的微亮提示 */
-    .stTabs [data-baseweb="tab"]:hover {
-        background-color: #ffeaea;
-        color: #FF4B4B;
-        border-color: #FF4B4B;
-    }
-
-    /* 5. 被選取的 Tab (Active) 呈現醒目的高光底色 */
-    .stTabs [aria-selected="true"] {
-        background-color: #FF4B4B !important;
-        color: #ffffff !important;
-        border-color: #FF4B4B !important;
-        box-shadow: 0 4px 6px rgba(255, 75, 75, 0.3);
-    }
-    
-    /* 隱藏預設的藍色底線 */
-    .stTabs [data-baseweb="tab-highlight"] {
-        background-color: transparent !important;
-    }
+    .stTabs [data-baseweb="tab-list"] { gap: 12px; background-color: #f8f9fa; padding: 10px; border-radius: 12px; }
+    .stTabs [data-baseweb="tab"] { height: 50px; font-weight: bold; font-size: 16px; background-color: #ffffff; border-radius: 8px; padding: 0 20px; color: #555555; border: 1px solid #e0e0e0; transition: all 0.3s ease; }
+    .stTabs [data-baseweb="tab"]:hover { background-color: #ffeaea; color: #FF4B4B; border-color: #FF4B4B; }
+    .stTabs [aria-selected="true"] { background-color: #FF4B4B !important; color: #ffffff !important; border-color: #FF4B4B !important; box-shadow: 0 4px 6px rgba(255, 75, 75, 0.3); }
+    .stTabs [data-baseweb="tab-highlight"] { background-color: transparent !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -60,14 +23,10 @@ st.title("🚒 消防體技能儀表板")
 @st.cache_data(ttl=60)
 def load_and_clean_data():
     try:
-        # 直接把網址設為字串變數
         sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQcsv0lMJmU68FYuyXRY6H4T9j9j8xgaC9xnSWwrCGbSuqACG1geXM34e-nvimhVQ/pub?gid=1434005373&single=true&output=csv"
-
-        # 1. 略過最上方第一行的合併大標題
         raw_df = pd.read_csv(sheet_url, header=None, skiprows=1)
         
-        # 2. 處理雙層表頭 (Row 0: 測驗項目, Row 1: 欄位細項)
-        main_headers = raw_df.iloc[0].ffill() # 橫向填充大項目
+        main_headers = raw_df.iloc[0].ffill() 
         sub_headers = raw_df.iloc[1].fillna('')
         
         new_cols = []
@@ -77,32 +36,44 @@ def load_and_clean_data():
             if m.startswith('Unnamed') or m == 'nan': m = ''
             if s.startswith('Unnamed') or s == 'nan': s = ''
             
-            # 組合新欄位名稱，例如 "立定跳遠_成績"
-            if m and s and m != s:
+            # 【修復重點1】避免表頭合併造成「基本資料_姓名」這種找不到欄位的狀況
+            if any(keyword in s for keyword in ['姓名', '大隊', '分隊', '單位', '性別', '年齡', '日期']):
+                new_cols.append(s)
+            elif m and s and m != s:
                 new_cols.append(f"{m}_{s}")
             elif m:
                 new_cols.append(m)
             else:
                 new_cols.append(s)
                 
-        # 3. 套用新表頭並切掉前兩行的表頭列
         df = raw_df.iloc[2:].copy()
         df.columns = new_cols
         df = df.reset_index(drop=True)
         
-        # 為了相容原本的程式，將「所屬單位」改名為「所屬大隊」
-        if '所屬單位' in df.columns and '所屬大隊' not in df.columns:
-            df = df.rename(columns={'所屬單位': '所屬大隊'})
-            
-        # 4. 防呆清理：濾除空白列或沒有名字的廢資料
-        df = df.dropna(how='all')
-        df = df.dropna(subset=['姓名'])
+        # 【修復重點2】自動校正欄位名稱
+        rename_map = {}
+        for c in df.columns:
+            c_str = str(c)
+            if ('大隊' in c_str or '所屬單位' in c_str) and '所屬大隊' not in c_str: 
+                rename_map[c] = '所屬大隊'
+            elif '分隊' in c_str and '單位' not in c_str: 
+                rename_map[c] = '單位'
+        df = df.rename(columns=rename_map)
         
-        # 自動識別有「_成績」結尾的欄位做為測驗項目
+        # 【修復重點3】強制補齊 UI 依賴的必要欄位，防止程式崩潰
+        if '所屬大隊' not in df.columns: df['所屬大隊'] = '未提供'
+        if '單位' not in df.columns: df['單位'] = '未提供'
+        if '性別' not in df.columns: df['性別'] = '未提供'
+            
+        df = df.dropna(how='all')
+        if '姓名' in df.columns:
+            df = df.dropna(subset=['姓名'])
+        else:
+            df['姓名'] = '未具名' # 極端狀況保護
+        
         score_cols = [c for c in df.columns if str(c).endswith('_成績')]
         test_metrics = [c.replace('_成績', '') for c in score_cols]
         
-        # 5. 將成績欄位與紀錄欄位轉為數值型態
         record_cols = [c for c in df.columns if any(x in c for x in ['_最佳', '_次數', '_趟數', '_總秒數', '_成績'])]
         numeric_cols = record_cols + ['年齡', '分數總和']
         
@@ -110,7 +81,6 @@ def load_and_clean_data():
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors='coerce')
                 
-        # 6. 年齡層分級
         if '年齡' in df.columns:
             bins = [20, 30, 40, 50, 70]
             labels = ['20-29歲', '30-39歲', '40-49歲', '50歲以上']
@@ -118,20 +88,18 @@ def load_and_clean_data():
         else:
             df['年齡層'] = '未提供'
             
-        # 7. 補上測驗日期 (以利歷史資料比對)
         if '測驗日期' not in df.columns:
             df['測驗日期'] = '114年下半年'
             
         return df, test_metrics
         
     except Exception as e:
-        st.error(f"資料讀取失敗，請檢查。錯誤訊息：{e}")
+        st.error(f"資料讀取或清理失敗，請檢查。錯誤訊息：{e}")
         return None, []
 
 # --- 讀取資料 ---
 df, test_metrics = load_and_clean_data()
 
-# 建立測驗項目對應原始紀錄的字典 (輔助紀錄查詢與雷達圖顯示原始數據)
 record_col_mapping = {
     '立定跳遠': '立定跳遠_最佳',
     '後拋擲遠': '後拋擲遠_最佳',
@@ -146,7 +114,6 @@ if df is not None and not df.empty and len(test_metrics) > 0:
     all_dates = sorted(df['測驗日期'].dropna().unique(), reverse=True)
     latest_date = all_dates[0] if all_dates else '本次測驗'
     
-    # 篩選出至少有一項成績的受測者
     score_col_names = [m + '_成績' for m in test_metrics]
     df_tested = df.dropna(subset=score_col_names, how='all')
     
@@ -239,13 +206,13 @@ if df is not None and not df.empty and len(test_metrics) > 0:
         sel_c1, sel_c2, sel_c3 = st.columns(3)
         with sel_c1:
             radar_brigades = df['所屬大隊'].dropna().unique()
-            radar_brigade = st.selectbox("1️⃣ 選擇大隊", radar_brigades, key='radar_brigade')
+            radar_brigade = st.selectbox("1️⃣ 選擇大隊", radar_brigades, key='radar_brigade') if len(radar_brigades) > 0 else None
         with sel_c2:
-            radar_units = df[df['所屬大隊'] == radar_brigade]['單位'].dropna().unique()
-            radar_unit = st.selectbox("2️⃣ 選擇單位", radar_units, key='radar_unit')
+            radar_units = df[df['所屬大隊'] == radar_brigade]['單位'].dropna().unique() if radar_brigade else []
+            radar_unit = st.selectbox("2️⃣ 選擇單位", radar_units, key='radar_unit') if len(radar_units) > 0 else None
         with sel_c3:
-            radar_names = df[(df['所屬大隊'] == radar_brigade) & (df['單位'] == radar_unit)]['姓名'].dropna().unique()
-            p_name = st.selectbox("3️⃣ 選擇隊員", radar_names, key='radar_name')
+            radar_names = df[(df['所屬大隊'] == radar_brigade) & (df['單位'] == radar_unit)]['姓名'].dropna().unique() if radar_unit else []
+            p_name = st.selectbox("3️⃣ 選擇隊員", radar_names, key='radar_name') if len(radar_names) > 0 else None
             
         cp1, cp2 = st.columns([1, 2])
         if p_name:
@@ -254,9 +221,9 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                 
                 if not p_records.empty:
                     p_latest = p_records.iloc[0]
-                    p_age_group = p_latest['年齡層']
+                    p_age_group = p_latest.get('年齡層', '未提供')
                     
-                    st.info(f"姓名： {p_latest['姓名']} | 單位： {p_latest['所屬大隊']} - {p_latest['單位']} | 年齡層： {p_age_group}")
+                    st.info(f"姓名： {p_latest.get('姓名')} | 單位： {p_latest.get('所屬大隊')} - {p_latest.get('單位')} | 年齡層： {p_age_group}")
                     
                     age_group_df = latest_tested_df[latest_tested_df['年齡層'] == p_age_group]
                     
@@ -301,19 +268,20 @@ if df is not None and not df.empty and len(test_metrics) > 0:
     with tab_record:
         st.subheader("📝 個人歷次測驗紀錄查詢 (原始數據：次數 / 最佳紀錄 / 秒數)")
         rc1, rc2, rc3 = st.columns(3)
-        with rc1: rec_brigade = st.selectbox("1️⃣ 選擇大隊", df['所屬大隊'].dropna().unique(), key='rec_brigade')
+        with rc1: 
+            rec_brigades = df['所屬大隊'].dropna().unique()
+            rec_brigade = st.selectbox("1️⃣ 選擇大隊", rec_brigades, key='rec_brigade') if len(rec_brigades) > 0 else None
         with rc2: 
-            rec_units = df[df['所屬大隊'] == rec_brigade]['單位'].dropna().unique()
-            rec_unit = st.selectbox("2️⃣ 選擇單位", rec_units, key='rec_unit')
+            rec_units = df[df['所屬大隊'] == rec_brigade]['單位'].dropna().unique() if rec_brigade else []
+            rec_unit = st.selectbox("2️⃣ 選擇單位", rec_units, key='rec_unit') if len(rec_units) > 0 else None
         with rc3:
-            rec_names = df[(df['所屬大隊'] == rec_brigade) & (df['單位'] == rec_unit)]['姓名'].dropna().unique()
-            rec_name = st.selectbox("3️⃣ 選擇隊員", rec_names, key='rec_name')
+            rec_names = df[(df['所屬大隊'] == rec_brigade) & (df['單位'] == rec_unit)]['姓名'].dropna().unique() if rec_unit else []
+            rec_name = st.selectbox("3️⃣ 選擇隊員", rec_names, key='rec_name') if len(rec_names) > 0 else None
             
         if rec_name:
             p_records_all = df[df['姓名'] == rec_name].sort_values(by='測驗日期', ascending=False)
             
             if not p_records_all.empty:
-                # 準備要顯示的實際紀錄欄位名稱
                 display_rec_cols = [record_col_mapping.get(m, m) for m in test_metrics]
                 display_cols = ['測驗日期'] + [c for c in display_rec_cols if c in p_records_all.columns]
                 
