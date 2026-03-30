@@ -60,14 +60,11 @@ st.title("🚒 消防體技能儀表板")
 @st.cache_data(ttl=60)
 def load_and_clean_data():
     try:
-        # 直接把網址設為字串變數，不要包在 st.secrets 裡面
-sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQcsv0lMJmU68FYuyXRY6H4T9j9j8xgaC9xnSWwrCGbSuqACG1geXM34e-nvimhVQ/pub?gid=1434005373&single=true&output=csv"
+        # 直接把網址設為字串變數
+        sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQcsv0lMJmU68FYuyXRY6H4T9j9j8xgaC9xnSWwrCGbSuqACG1geXM34e-nvimhVQ/pub?gid=1434005373&single=true&output=csv"
 
-# 直接讀取
-df = pd.read_csv(sheet_url)
-        
         # 1. 略過最上方第一行的合併大標題
-        raw_df = pd.read_csv(url, header=None, skiprows=1)
+        raw_df = pd.read_csv(sheet_url, header=None, skiprows=1)
         
         # 2. 處理雙層表頭 (Row 0: 測驗項目, Row 1: 欄位細項)
         main_headers = raw_df.iloc[0].ffill() # 橫向填充大項目
