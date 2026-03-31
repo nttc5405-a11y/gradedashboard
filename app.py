@@ -125,7 +125,6 @@ if df is not None and not df.empty and len(test_metrics) > 0:
     with k4: st.metric("參測分隊數", f"{latest_tested_df['單位'].nunique()} 個")
     with k5: st.metric("最新測驗日期", f"{latest_date}")
 
-    # 🌟 新增 tab_leaderboard 在這裡
     tab_overview, tab_group, tab_individual, tab_record, tab_alert, tab_leaderboard = st.tabs([
         "📊 戰情總覽", "🔍 交叉分析", "🎯 個人雷達", "📝 紀錄查詢", "🚨 預警與進步榜", "🏆 總分排行榜"
     ])
@@ -225,7 +224,6 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                     
                     st.info(f"姓名： {p_latest.get('姓名')} | 單位： {p_latest.get('所屬大隊')} - {p_latest.get('單位')} | 年齡層： {p_age_group}")
                     
-                    # 🌟 這裡加上總分顯示
                     total_score = p_latest.get('分數總和', '無資料')
                     if pd.notna(total_score):
                         st.success(f"🏆 本次測驗分數總和： **{int(total_score)}** 分")
@@ -379,7 +377,7 @@ if df is not None and not df.empty and len(test_metrics) > 0:
             else:
                 st.info("資料不足兩次測驗，無法比對。")
 
-    # 🌟 新增 Tab 6: 總分排行榜
+    # --- Tab 6: 總分排行榜 ---
     with tab_leaderboard:
         st.subheader("🏆 單位與個人分數總和排行榜")
         
@@ -392,9 +390,17 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                 
                 if not top_individuals.empty:
                     top_individuals.insert(0, '名次', range(1, len(top_individuals) + 1))
-                    # 將分數轉為整數顯示更乾淨
                     top_individuals['分數總和'] = top_individuals['分數總和'].astype(int)
-                    st.dataframe(top_individuals[['名次', '所屬大隊', '單位', '姓名', '分數總和']], hide_index=True, use_container_width=True)
+                    
+                    # 🌟 這裡處理並加入年齡欄位
+                    if '年齡' in top_individuals.columns:
+                        # 轉成 Int64 可避免 NaN 導致的小數點問題
+                        top_individuals['年齡'] = top_individuals['年齡'].astype('Int64')
+                        display_cols = ['名次', '所屬大隊', '單位', '姓名', '年齡', '分數總和']
+                    else:
+                        display_cols = ['名次', '所屬大隊', '單位', '姓名', '分數總和']
+                        
+                    st.dataframe(top_individuals[display_cols], hide_index=True, use_container_width=True)
                 else:
                     st.info("目前尚無分數總和資料。")
                     
