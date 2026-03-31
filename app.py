@@ -36,7 +36,7 @@ def load_and_clean_data():
             if m.startswith('Unnamed') or m == 'nan': m = ''
             if s.startswith('Unnamed') or s == 'nan': s = ''
             
-            if any(keyword in s for keyword in ['姓名', '大隊', '分隊', '單位', '性別', '年齡', '日期']):
+            if any(keyword in s for keyword in ['姓名', '大隊', '分隊', '單位', '性別', '年齡', '日期', '分數總和']):
                 new_cols.append(s)
             elif m and s and m != s:
                 new_cols.append(f"{m}_{s}")
@@ -49,7 +49,6 @@ def load_and_clean_data():
         df.columns = new_cols
         df = df.reset_index(drop=True)
         
-        # 🚀 【關鍵修復】剔除重複的欄位名稱！這是讓交叉分析能順利畫圖的關鍵
         df = df.loc[:, ~df.columns.duplicated()]
         
         rename_map = {}
@@ -126,8 +125,9 @@ if df is not None and not df.empty and len(test_metrics) > 0:
     with k4: st.metric("參測分隊數", f"{latest_tested_df['單位'].nunique()} 個")
     with k5: st.metric("最新測驗日期", f"{latest_date}")
 
-    tab_overview, tab_group, tab_individual, tab_record, tab_alert = st.tabs([
-        "📊 戰情總覽", "🔍 交叉分析", "🎯 個人雷達", "📝 紀錄查詢", "🚨 預警與進步榜"
+    # 🌟 新增 tab_leaderboard 在這裡
+    tab_overview, tab_group, tab_individual, tab_record, tab_alert, tab_leaderboard = st.tabs([
+        "📊 戰情總覽", "🔍 交叉分析", "🎯 個人雷達", "📝 紀錄查詢", "🚨 預警與進步榜", "🏆 總分排行榜"
     ])
 
     # --- Tab 1: 戰情總覽 ---
@@ -225,6 +225,13 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                     
                     st.info(f"姓名： {p_latest.get('姓名')} | 單位： {p_latest.get('所屬大隊')} - {p_latest.get('單位')} | 年齡層： {p_age_group}")
                     
+                    # 🌟 這裡加上總分顯示
+                    total_score = p_latest.get('分數總和', '無資料')
+                    if pd.notna(total_score):
+                        st.success(f"🏆 本次測驗分數總和： **{int(total_score)}** 分")
+                    else:
+                        st.success(f"🏆 本次測驗分數總和： 無資料")
+
                     age_group_df = latest_tested_df[latest_tested_df['年齡層'] == p_age_group]
                     
                     st.write(f"{latest_date} 最新明細 (紀錄 / 分數)：")
@@ -371,5 +378,39 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                     st.info("目前無人達到設定的進步門檻。")
             else:
                 st.info("資料不足兩次測驗，無法比對。")
+
+    # 🌟 新增 Tab 6: 總分排行榜
+    with tab_leaderboard:
+        st.subheader("🏆 單位與個人分數總和排行榜")
+        
+        if '分數總和' in latest_tested_df.columns:
+            lb1, lb2 = st.columns(2)
+            
+            with lb1:
+                st.markdown(f"##### 🥇 全縣個人總分 Top 15 ({latest_date})")
+                top_individuals = latest_tested_df.dropna(subset=['分數總和']).sort_values(by='分數總和', ascending=False).head(15)
+                
+                if not top_individuals.empty:
+                    top_individuals.insert(0, '名次', range(1, len(top_individuals) + 1))
+                    # 將分數轉為整數顯示更乾淨
+                    top_individuals['分數總和'] = top_individuals['分數總和'].astype(int)
+                    st.dataframe(top_individuals[['名次', '所屬大隊', '單位', '姓名', '分數總和']], hide_index=True, use_container_width=True)
+                else:
+                    st.info("目前尚無分數總和資料。")
+                    
+            with lb2:
+                st.markdown(f"##### 🏢 各單位平均總分排行榜 ({latest_date})")
+                unit_avg_total = latest_tested_df.dropna(subset=['分數總和']).groupby(['所屬大隊', '單位'])['分數總和'].mean().reset_index()
+                unit_avg_total = unit_avg_total.sort_values(by='分數總和', ascending=False)
+                
+                if not unit_avg_total.empty:
+                    unit_avg_total.insert(0, '名次', range(1, len(unit_avg_total) + 1))
+                    unit_avg_total['分數總和'] = unit_avg_total['分數總和'].round(1)
+                    st.dataframe(unit_avg_total[['名次', '所屬大隊', '單位', '分數總和']], hide_index=True, use_container_width=True)
+                else:
+                    st.info("目前尚無單位平均資料。")
+        else:
+            st.warning("⚠️ 資料表中找不到「分數總和」欄位，請確認 Google 試算表格式。")
+
 else:
     st.info("等待讀取資料庫，或資料格式不符...")
