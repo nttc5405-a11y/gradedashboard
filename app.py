@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import numpy as np
 
-st.set_page_config(page_title="成功消防大隊 - 體技能儀表板 3.0", page_icon="🚒", layout="wide")
+st.set_page_config(page_title="台東縣消防局 - 體技能儀表板 3.0", page_icon="🚒", layout="wide")
 
 # --- 進階實體按鈕樣式與版面設計 ---
 st.markdown("""
