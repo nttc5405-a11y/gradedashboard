@@ -58,23 +58,25 @@ def load_and_clean_data():
         df = df.reset_index(drop=True)
         df = df.loc[:, ~df.columns.duplicated()]
 
-        # 修正大隊重命名邏輯，避免重複賦值
+# 尋找並統一「大隊」與「分隊/單位」欄位名稱，避免找不到導致 UI 跑位
         rename_map = {}
-        has_brigade = False
         for c in df.columns:
             c_str = str(c)
-            if c_str in ['消防局大隊', '大隊', '消防大隊', '所屬大隊'] or (('大隊' in c_str) and '_' not in c_str):
-                if not has_brigade:
-                    rename_map[c] = '消防局大隊'
-                    has_brigade = True
-            if '分隊' in c_str and '_' not in c_str and c_str != '分隊':
+            
+            # 判斷是否為「大隊」相關欄位 (排除測驗成績如 '_成績' 的底線)
+            if '大隊' in c_str and '_' not in c_str and '消防局大隊' not in rename_map.values():
+                rename_map[c] = '消防局大隊'
+                
+            # 判斷是否為「分隊」或「單位」欄位 (排除大隊欄位本身，以及測驗成績)
+            elif ('分隊' in c_str or '單位' in c_str) and '大隊' not in c_str and '_' not in c_str and '分隊' not in rename_map.values():
                 rename_map[c] = '分隊'
                 
         df = df.rename(columns=rename_map)
 
-        if '消防局大隊' not in df.columns: df['消防局大隊'] = '未知大隊'
-        if '分隊' not in df.columns: df['分隊'] = '未知分隊'
-        if '性別' not in df.columns: df['性別'] = '未知性別'
+        # 確保欄位絕對存在
+        if '消防局大隊' not in df.columns: df['消防局大隊'] = '未提供大隊'
+        if '分隊' not in df.columns: df['分隊'] = '未提供分隊'
+        if '性別' not in df.columns: df['性別'] = '未提供'
 
         df = df.dropna(how='all')
         if '姓名' in df.columns:
