@@ -37,7 +37,7 @@ def load_and_clean_data():
             if m.startswith('Unnamed') or m == 'nan': m = ''
             if s.startswith('Unnamed') or s == 'nan': s = ''
 
-            if any(keyword in s for keyword in ['姓名', '大隊', '成績', '分隊', '性別', '年齡', '測驗', '分數總和']):
+            if any(keyword in s for keyword in ['姓名', '大隊', '成績', '分隊', '性別', '年齡', '測驗', '分數總和', '總秒數', '趟數', '次數', '最佳']):
                 new_cols.append(s)
             elif m and s and m != s:
                 new_cols.append(f"{m}_{s}")
@@ -51,13 +51,13 @@ def load_and_clean_data():
         df = df.reset_index(drop=True)
         df = df.loc[:, ~df.columns.duplicated()]
 
+        # 只重命名明確的大隊欄位（不含底線，避免誤改 _成績 欄位）
         rename_map = {}
         for c in df.columns:
             c_str = str(c)
-            if ('大隊' in c_str or '消防局大隊' in c_str) and '消防局大隊' not in c_str:
-                rename_map[c] = '消防局大隊'
-            elif '成績' in c_str and '分隊' not in c_str and c_str != '分數總和':
-                rename_map[c] = '分隊'
+            if c_str in ['消防局大隊', '大隊', '消防大隊'] or (('消防大隊' in c_str or c_str == '大隊') and '_' not in c_str and '消防局大隊' not in c_str):
+                if '消防局大隊' not in df.columns:
+                    rename_map[c] = '消防局大隊'
         df = df.rename(columns=rename_map)
 
         if '消防局大隊' not in df.columns: df['消防局大隊'] = '未知大隊'
