@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import numpy as np
+import plotly.graph_objects as go  # 新增：用於疊加直方圖與曲線
+import scipy.stats as stats        # 新增：用於計算常態分布理論值
 
 st.set_page_config(page_title="台東縣消防局 - 體技能儀表板 3.0", page_icon="🚒", layout="wide")
 
@@ -125,8 +127,9 @@ if df is not None and not df.empty and len(test_metrics) > 0:
     with k4: st.metric("參測分隊數", f"{latest_tested_df['單位'].nunique()} 個")
     with k5: st.metric("最新測驗日期", f"{latest_date}")
 
-    tab_overview, tab_group, tab_individual, tab_record, tab_alert, tab_leaderboard, tab_planning = st.tabs([
-        "📊 戰情總覽", "🔍 交叉分析", "🎯 個人雷達", "📝 紀錄查詢", "🚨 預警與進步榜", "🏆 總分排行榜", "📋 體能規劃建議"
+    # 新增 tab_distribution 分頁
+    tab_overview, tab_group, tab_individual, tab_record, tab_alert, tab_leaderboard, tab_distribution, tab_planning = st.tabs([
+        "📊 戰情總覽", "🔍 交叉分析", "🎯 個人雷達", "📝 紀錄查詢", "🚨 預警與進步榜", "🏆 總分排行榜", "📊 常模與分布", "📋 體能規劃建議"
     ])
 
     # --- Tab 1: 戰情總覽 ---
@@ -226,7 +229,7 @@ if df is not None and not df.empty and len(test_metrics) > 0:
 
                     total_score = p_latest.get('分數總和', '無資料')
                     if pd.notna(total_score):
-                        st.success(f"🏆 本次測驗分數總和： **{int(total_score)}** 分")
+                        st.success(f"🏆 本次測驗分數總和： {int(total_score)} 分")
                     else:
                         st.success(f"🏆 本次測驗分數總和： 無資料")
 
@@ -416,7 +419,88 @@ if df is not None and not df.empty and len(test_metrics) > 0:
         else:
             st.warning("⚠️ 資料表中找不到「分數總和」欄位，請確認 Google 試算表格式。")
 
-    # --- Tab 7: 體能規劃建議 ---
+    # --- Tab 7: 常模與分布 (新增) ---
+    with tab_distribution:
+        st.subheader("📈 團隊體能落點分析與常態分布")
+        st.info("💡 **解讀指南**：藍色長條圖為「實際成績分布」，紅色曲線為「理論常態分布」。當實際分布出現雙峰，代表團隊內體能落差擴大。")
+
+        # 篩選可分析的數值欄位：包含成績(分數)、總秒數(跑步)、最佳、次數、趟數、分數總和
+        analyzable_cols = [c for c in df_tested.columns if str(c).endswith(('_成績', '_最佳', '_次數', '_趟數', '_總秒數', '分數總和'))]
+        analyzable_cols = [c for c in analyzable_cols if not df_tested[c].isna().all()]
+
+        if analyzable_cols:
+            selected_metric_dist = st.selectbox("請選擇要分析的測驗項目或分數：", analyzable_cols, key="dist_select")
+
+            # 排除 NaN 空值
+            data = df_tested[selected_metric_dist].dropna()
+
+            if len(data) > 1:
+                mean_val = data.mean()
+                std_val = data.std()
+                median_val = data.median()
+
+                fig_dist = go.Figure()
+
+                # 直方圖
+                fig_dist.add_trace(go.Histogram(
+                    x=data,
+                    histnorm='probability density',
+                    name='實際數據分布',
+                    marker_color='#4E89AE',
+                    opacity=0.7
+                ))
+
+                # 常態分布曲線
+                x_min, x_max = data.min(), data.max()
+                std_val_safe = std_val if std_val > 0 else 1
+                x_axis = np.linspace(x_min - std_val_safe, x_max + std_val_safe, 100)
+                y_axis = stats.norm.pdf(x_axis, mean_val, std_val_safe)
+
+                fig_dist.add_trace(go.Scatter(
+                    x=x_axis,
+                    y=y_axis,
+                    mode='lines',
+                    name='理想常態曲線',
+                    line=dict(color='#FF4B4B', width=3)
+                ))
+
+                # 輔助線
+                fig_dist.add_vline(x=mean_val, line_dash="dash", line_color="#2E8B57",
+                                   annotation_text=f"平均: {mean_val:.1f}")
+
+                if std_val > 0:
+                    fig_dist.add_vline(x=mean_val + std_val, line_dash="dot", line_color="#EdaA3B", annotation_text="+1 SD")
+                    fig_dist.add_vline(x=mean_val - std_val, line_dash="dot", line_color="#EdaA3B", annotation_text="-1 SD")
+
+                fig_dist.update_layout(
+                    title=dict(text=f"{selected_metric_dist} - 全局落點狀態", font=dict(size=18)),
+                    xaxis_title="成績 / 數值",
+                    yaxis_title="機率密度 (Density)",
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+
+                st.plotly_chart(fig_dist, use_container_width=True)
+
+                # 描述統計儀表板
+                st.markdown("#### 🔢 描述統計摘要")
+                summary_col1, summary_col2, summary_col3, summary_col4, summary_col5 = st.columns(5)
+
+                summary_col1.metric("有效樣本", f"{len(data)} 人")
+                summary_col2.metric("平均值 (Mean)", f"{mean_val:.2f}")
+                summary_col3.metric("中位數 (Median)", f"{median_val:.2f}")
+                summary_col4.metric("標準差 (SD)", f"{std_val:.2f}")
+
+                cv = (std_val / mean_val) * 100 if mean_val != 0 else 0
+                summary_col5.metric("變異係數 (CV)", f"{cv:.1f}%", help="CV = (標準差/平均值)*100%。若大於20%代表實力落差極大。")
+
+            else:
+                st.warning("⚠️ 該項目的有效數據不足，無法計算。")
+        else:
+            st.warning("⚠️ 無可分析的數值欄位。")
+
+
+    # --- Tab 8: 體能規劃建議 ---
     with tab_planning:
         st.subheader("📋 體能現況分析與訓練規劃建議")
         st.caption(f"以下分析基於 {latest_date} 測驗資料，共 {latest_tested_df['姓名'].nunique()} 名受測人員")
@@ -531,7 +615,7 @@ if df is not None and not df.empty and len(test_metrics) > 0:
             weakest = avg_score_df.iloc[0]['測驗項目']
             weakest_score = avg_score_df.iloc[0]['全體平均分']
             weakest_fail_rate = avg_score_df.iloc[0]['低於60分比率']
-            st.error(f"⚠️ **最弱項目：{weakest}**（平均 {weakest_score} 分，{weakest_fail_rate}% 人員低於60分）— 應列為全體優先訓練目標。")
+            st.error(f"⚠️ 最弱項目：{weakest}（平均 {weakest_score} 分，{weakest_fail_rate}% 人員低於60分）— 應列為全體優先訓練目標。")
 
         # ── 三、年齡層體能表現分析 ────────────────────────────────
         st.markdown("---")
@@ -605,30 +689,30 @@ if df is not None and not df.empty and len(test_metrics) > 0:
             st.markdown("""
 | 測驗項目 | 訓練重點 | 建議方式 | 建議頻率 |
 |----------|----------|----------|----------|
-| **1500公尺跑步** | 有氧耐力 | 慢跑 / 間歇跑，每次 20-30 分鐘 | 每週 3 次 |
-| **菱形槓硬舉** | 下肢與核心肌力 | 漸進式負重，著重核心穩定 | 每週 2 次 |
-| **懸吊屈體** | 核心與上肢拉力 | 引體向上 / 懸吊訓練，小量多組 | 每日 |
-| **後拋擲遠** | 全身爆發力 | 藥球訓練、彈力帶爆發動作 | 每週 2 次 |
-| **立定跳遠** | 下肢爆發力 | 深蹲跳、跳箱訓練 | 每週 2 次 |
-| **折返跑** | 敏捷與方向變換 | 梯狀訓練、T 字跑 | 每週 2 次 |
-| **負重行走** | 功能性體能 | 穿著消防裝備負重行走 | 每週 1 次 |
+| 1500公尺跑步 | 有氧耐力 | 慢跑 / 間歇跑，每次 20-30 分鐘 | 每週 3 次 |
+| 菱形槓硬舉 | 下肢與核心肌力 | 漸進式負重，著重核心穩定 | 每週 2 次 |
+| 懸吊屈體 | 核心與上肢拉力 | 引體向上 / 懸吊訓練，小量多組 | 每日 |
+| 後拋擲遠 | 全身爆發力 | 藥球訓練、彈力帶爆發動作 | 每週 2 次 |
+| 立定跳遠 | 下肢爆發力 | 深蹲跳、跳箱訓練 | 每週 2 次 |
+| 折返跑 | 敏捷與方向變換 | 梯狀訓練、T 字跑 | 每週 2 次 |
+| 負重行走 | 功能性體能 | 穿著消防裝備負重行走 | 每週 1 次 |
 """)
-            st.info("💡 **最優先行動**：對 1500 公尺跑步超時未完成（得 0 分）的人員立刻介入，每週三次 20-30 分鐘慢跑，12 週內多數人可達標，是最快提升總分的途徑。")
+            st.info("💡 最優先行動：對 1500 公尺跑步超時未完成（得 0 分）的人員立刻介入，每週三次 20-30 分鐘慢跑，12 週內多數人可達標，是最快提升總分的途徑。")
 
         with rec_tab2:
             st.markdown("""
 | 年齡層 | 主要風險 | 訓練策略 |
 |--------|----------|----------|
-| **20-29 歲** | 技術不足、易受傷 | 建立正確動作模式，打好基礎；以技術品質優先於重量 |
-| **30-39 歲** | 工作繁忙、訓練量下滑 | 固定每週 2 次結構訓練，防止提前退步 |
-| **40-49 歲** | 心肺與爆發力下降 | 中低強度有氧 + 輕重量高次數阻力訓練 |
-| **50 歲以上** | 跑步成績偏低、關節保護需求高 | 改以自行車或游泳維持心肺；硬舉改輕重量高次數 |
+| 20-29 歲 | 技術不足、易受傷 | 建立正確動作模式，打好基礎；以技術品質優先於重量 |
+| 30-39 歲 | 工作繁忙、訓練量下滑 | 固定每週 2 次結構訓練，防止提前退步 |
+| 40-49 歲 | 心肺與爆發力下降 | 中低強度有氧 + 輕重量高次數阻力訓練 |
+| 50 歲以上 | 跑步成績偏低、關節保護需求高 | 改以自行車或游泳維持心肺；硬舉改輕重量高次數 |
 """)
-            st.warning("⚠️ 建議 **50 歲以上人員每季進行一次體能評估**（而非每半年），以便及早發現退步並介入，避免累積到正式測驗才補救。")
+            st.warning("⚠️ 建議 50 歲以上人員每季進行一次體能評估（而非每半年），以便及早發現退步並介入，避免累積到正式測驗才補救。")
 
         with rec_tab3:
             st.markdown("""
-**分級介入制度建議：**
+分級介入制度建議：
 
 | 平均單項得分 | 分級 | 處置方式 |
 |-------------|------|----------|
@@ -637,12 +721,12 @@ if df is not None and not df.empty and len(test_metrics) > 0:
 | 50-69 分 | 🟠 待加強 | 指派教練輔導 + 次季複測追蹤 |
 | < 50 分 | 🔴 高風險 | 個別計畫 + 必要時進行醫療評估 |
 
-**測驗制度優化建議：**
+測驗制度優化建議：
 - 📅 每半年正式評核（維持現行）
 - 📊 每季簡化版自評（3 項核心：1500m 跑步、菱形槓硬舉、懸吊屈體）
 - ⚖️ 每月記錄體重 / BMI，早期發現體能下滑前兆
 
-**資料蒐集建議（讓儀表板更有預測力）：**
+資料蒐集建議（讓儀表板更有預測力）：
 - 加入「每週訓練時數」欄位，找出訓練量與成績的相關性
 - 補齊病號 / 支援訓中人員的複測結果，避免統計缺口
 - 累積兩次以上測驗資料後，退步預警功能（預警分頁）即可自動啟用
