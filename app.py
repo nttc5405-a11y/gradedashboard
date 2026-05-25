@@ -21,7 +21,13 @@ st.markdown("""
 
 st.title("🚒 消防局體技能儀表板 v4.0")
 
-@st.cache_data(ttl=60)
+# 加入手動更新按鈕
+if st.sidebar.button("🔄 強制更新資料庫"):
+    st.cache_data.clear()
+    st.rerun()
+
+# 延長快取至 10 分鐘，避免頻繁請求 Google Sheets
+@st.cache_data(ttl=600)
 def load_and_clean_data():
     try:
         sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQcsv0lMJmU68FYuyXRY6H4T9j9j8xgaC9xnSWwrCGbSuqACG1geXM34e-nvimhVQ/pub?gid=1434005373&single=true&output=csv"
@@ -37,7 +43,8 @@ def load_and_clean_data():
             if m.startswith('Unnamed') or m == 'nan': m = ''
             if s.startswith('Unnamed') or s == 'nan': s = ''
 
-            if any(keyword in s for keyword in ['姓名', '大隊', '成績', '分隊', '性別', '年齡', '測驗', '分數總和', '總秒數', '趟數', '次數', '最佳']):
+            # ✅ 修正點：移除了 '成績', '總秒數', '趟數', '次數', '最佳'，讓它們進入 elif 合併
+            if any(keyword in s for keyword in ['姓名', '大隊', '分隊', '單位', '性別', '年齡', '測驗', '日期', '分數總和']):
                 new_cols.append(s)
             elif m and s and m != s:
                 new_cols.append(f"{m}_{s}")
@@ -51,13 +58,18 @@ def load_and_clean_data():
         df = df.reset_index(drop=True)
         df = df.loc[:, ~df.columns.duplicated()]
 
-        # 只重命名明確的大隊欄位（不含底線，避免誤改 _成績 欄位）
+        # 修正大隊重命名邏輯，避免重複賦值
         rename_map = {}
+        has_brigade = False
         for c in df.columns:
             c_str = str(c)
-            if c_str in ['消防局大隊', '大隊', '消防大隊'] or (('消防大隊' in c_str or c_str == '大隊') and '_' not in c_str and '消防局大隊' not in c_str):
-                if '消防局大隊' not in df.columns:
+            if c_str in ['消防局大隊', '大隊', '消防大隊', '所屬大隊'] or (('大隊' in c_str) and '_' not in c_str):
+                if not has_brigade:
                     rename_map[c] = '消防局大隊'
+                    has_brigade = True
+            if '分隊' in c_str and '_' not in c_str and c_str != '分隊':
+                rename_map[c] = '分隊'
+                
         df = df.rename(columns=rename_map)
 
         if '消防局大隊' not in df.columns: df['消防局大隊'] = '未知大隊'
@@ -87,6 +99,10 @@ def load_and_clean_data():
         else:
             df['年齡層'] = '未知年齡'
 
+        # 確保有測驗日期欄位
+        date_col = next((c for c in df.columns if '測驗' in c or '日期' in c), None)
+        if date_col:
+            df = df.rename(columns={date_col: '測驗日期'})
         if '測驗日期' not in df.columns:
             df['測驗日期'] = '114年下半年'
 
@@ -136,11 +152,28 @@ if df is not None and not df.empty and len(test_metrics) > 0:
     # 特殊狀態人員統計
     special_df = df[df['特殊狀態'] != '']
     if not special_df.empty:
-        st.warning(f"⚠️ 本次資料中有 **{len(special_df)}** 名特殊狀態人員（病號/支援訓中等），成績可能為空。")
+        st.warning(f"⚠️ 本次資料中有 {len(special_df)} 名特殊狀態人員（病號/支援訓中等），成績可能為空。")
 
     tab_overview, tab_group, tab_individual, tab_record, tab_alert, tab_leaderboard, tab_planning, tab_stats = st.tabs([
         "📊 總覽概況", "📌 分組比較", "🏷️ 個人體能", "📝 個人紀錄", "🚨 預警系統", "🏆 排行榜", "📋 訓練規劃", "🔬 深度分析"
     ])
+
+    # ==========================================
+    # ===== 共用 UI 元件 (DRY 原則) =====
+    # ==========================================
+    def render_personnel_selector(prefix_key):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            brigades = df['消防局大隊'].dropna().unique()
+            sel_brigade = st.selectbox("1️⃣ 選擇大隊", brigades, key=f'{prefix_key}_b') if len(brigades) > 0 else None
+        with c2:
+            units = df[df['消防局大隊'] == sel_brigade]['分隊'].dropna().unique() if sel_brigade else []
+            sel_unit = st.selectbox("2️⃣ 選擇分隊", units, key=f'{prefix_key}_u') if len(units) > 0 else None
+        with c3:
+            names = df[(df['消防局大隊'] == sel_brigade) & (df['分隊'] == sel_unit)]['姓名'].dropna().unique() if sel_unit else []
+            sel_name = st.selectbox("3️⃣ 選擇姓名", names, key=f'{prefix_key}_n') if len(names) > 0 else None
+        return sel_name
+
 
     # ===== Tab 1: 總覽概況 =====
     with tab_overview:
@@ -182,7 +215,6 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                     fig_hist.update_layout(yaxis_title="人數")
                     st.plotly_chart(fig_hist, use_container_width=True)
 
-        # 大隊 × 項目弱點熱圖（新功能）
         st.markdown("---")
         st.markdown("#### 🔥 大隊 × 測驗項目平均成績熱圖")
         st.caption("顏色越紅代表該大隊在該項目的平均成績越低，可快速識別弱點。")
@@ -218,7 +250,6 @@ if df is not None and not df.empty and len(test_metrics) > 0:
             )
             st.plotly_chart(fig_heatmap, use_container_width=True)
 
-        # 特殊狀態人員清單
         if not special_df.empty:
             with st.expander(f"🏥 特殊狀態人員清單（共 {len(special_df)} 人）"):
                 show_cols = ['消防局大隊', '分隊', '姓名', '特殊狀態']
@@ -253,7 +284,6 @@ if df is not None and not df.empty and len(test_metrics) > 0:
             st.plotly_chart(fig_box, use_container_width=True)
             st.info(f"📌 符合條件共有 {len(filtered)} 筆有效成績資料。")
 
-            # CSV 下載按鈕（新功能）
             csv_data = filtered.to_csv(index=False, encoding='utf-8-sig')
             st.download_button(
                 label="⬇️ 下載篩選資料 CSV",
@@ -262,11 +292,8 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                 mime="text/csv"
             )
 
-            # 描述性統計分析（新功能）
             st.markdown("---")
-            st.markdown("#### 📊 描述性統計分析（新功能）")
-            st.caption("針對當前篩選條件下各分組的成績進行統計摘要。")
-
+            st.markdown("#### 📊 描述性統計分析")
             desc_tab1, desc_tab2 = st.tabs(["📈 整體描述統計", "📋 分組統計表"])
 
             with desc_tab1:
@@ -291,8 +318,7 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                 group_by_col = st.selectbox("分組依據", ['消防局大隊', '分隊', '性別', '年齡層'], key='desc_group')
                 if target_score_col in filtered.columns:
                     grp_desc = filtered.groupby(group_by_col)[target_score_col].agg(
-                        人數='count', 平均='mean', 標準差='std', 最低='min',
-                        中位數='median', 最高='max'
+                        人數='count', 平均='mean', 標準差='std', 最低='min', 中位數='median', 最高='max'
                     ).round(2).reset_index()
                     st.dataframe(grp_desc, hide_index=True, use_container_width=True)
 
@@ -305,25 +331,15 @@ if df is not None and not df.empty and len(test_metrics) > 0:
         else:
             st.warning("⚠️ 無符合條件的資料，請調整篩選條件。")
 
-    # ===== Tab 3: 個人體能（修正 Radar Bug）=====
+    # ===== Tab 3: 個人體能 =====
     with tab_individual:
         st.subheader("🏷️ 個人體能 PR 值雷達圖（同性別+年齡層比較）")
-        sel_c1, sel_c2, sel_c3 = st.columns(3)
-        with sel_c1:
-            radar_brigades = df['消防局大隊'].dropna().unique()
-            radar_brigade = st.selectbox("1️⃣ 選擇大隊", radar_brigades, key='radar_brigade') if len(radar_brigades) > 0 else None
-        with sel_c2:
-            radar_units = df[df['消防局大隊'] == radar_brigade]['分隊'].dropna().unique() if radar_brigade else []
-            radar_unit = st.selectbox("2️⃣ 選擇分隊", radar_units, key='radar_unit') if len(radar_units) > 0 else None
-        with sel_c3:
-            radar_names = df[(df['消防局大隊'] == radar_brigade) & (df['分隊'] == radar_unit)]['姓名'].dropna().unique() if radar_unit else []
-            p_name = st.selectbox("3️⃣ 選擇姓名", radar_names, key='radar_name') if len(radar_names) > 0 else None
+        p_name = render_personnel_selector('radar')
 
         cp1, cp2 = st.columns([1, 2])
         if p_name:
             with cp1:
                 p_records = df_tested[df_tested['姓名'] == p_name].sort_values(by='測驗日期', ascending=False)
-
                 if not p_records.empty:
                     p_latest = p_records.iloc[0]
                     p_age_group = p_latest.get('年齡層', '未知')
@@ -333,9 +349,8 @@ if df is not None and not df.empty and len(test_metrics) > 0:
 
                     total_score = p_latest.get('分數總和', '計算中')
                     if pd.notna(total_score):
-                        st.success(f"🏅 最新測驗總成績：**{int(total_score)}** 分")
+                        st.success(f"🏅 最新測驗總成績：{int(total_score)} 分")
 
-                    # ✅ 修正 Bug：使用同性別+同年齡層的母體計算百分位
                     same_group_df = latest_tested_df[
                         (latest_tested_df['性別'] == p_gender) &
                         (latest_tested_df['年齡層'] == p_age_group)
@@ -364,7 +379,6 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                         score_col = m + '_成績'
                         val = p_latest[score_col]
                         if pd.notna(val):
-                            # ✅ 修正 Bug：在相同性別+年齡層中計算百分位數
                             same_group_vals = same_group_df[score_col].dropna()
                             if len(same_group_vals) > 0:
                                 pr = (same_group_vals <= val).mean() * 100
@@ -387,16 +401,7 @@ if df is not None and not df.empty and len(test_metrics) > 0:
     # ===== Tab 4: 個人紀錄 =====
     with tab_record:
         st.subheader("📝 個人歷次測驗紀錄（原始成績 / 最佳成績 / 趟數）")
-        rc1, rc2, rc3 = st.columns(3)
-        with rc1:
-            rec_brigades = df['消防局大隊'].dropna().unique()
-            rec_brigade = st.selectbox("1️⃣ 選擇大隊", rec_brigades, key='rec_brigade') if len(rec_brigades) > 0 else None
-        with rc2:
-            rec_units = df[df['消防局大隊'] == rec_brigade]['分隊'].dropna().unique() if rec_brigade else []
-            rec_unit = st.selectbox("2️⃣ 選擇分隊", rec_units, key='rec_unit') if len(rec_units) > 0 else None
-        with rc3:
-            rec_names = df[(df['消防局大隊'] == rec_brigade) & (df['分隊'] == rec_unit)]['姓名'].dropna().unique() if rec_unit else []
-            rec_name = st.selectbox("3️⃣ 選擇姓名", rec_names, key='rec_name') if len(rec_names) > 0 else None
+        rec_name = render_personnel_selector('rec')
 
         if rec_name:
             p_records_all = df[df['姓名'] == rec_name].sort_values(by='測驗日期', ascending=False)
@@ -410,14 +415,12 @@ if df is not None and not df.empty and len(test_metrics) > 0:
 
                 st.markdown("---")
                 st.markdown("##### 📊 歷次成績趨勢")
-
                 rec_metric_base = st.selectbox("選擇查看歷次的測驗項目：", test_metrics, key='rec_metric_sel')
                 target_rec_col = record_col_mapping.get(rec_metric_base, rec_metric_base)
 
-                # 試次改善分析（新功能）
                 attempt_cols = [c for c in p_records_all.columns if rec_metric_base in c and c != target_rec_col and c != rec_metric_base + '_成績']
                 if attempt_cols and not p_records_all.empty:
-                    st.markdown("**各試次成績（最新一次測驗）：**")
+                    st.markdown("各試次成績（最新一次測驗）：")
                     latest_attempt_row = p_records_all.iloc[0]
                     attempt_vals = []
                     for ac in attempt_cols:
@@ -439,16 +442,14 @@ if df is not None and not df.empty and len(test_metrics) > 0:
 
                 if target_rec_col in p_records_all.columns:
                     plot_data = p_records_all.dropna(subset=[target_rec_col]).sort_values(by='測驗日期')
-
                     if not plot_data.empty:
                         fig_rec = px.line(plot_data, x='測驗日期', y=target_rec_col, markers=True, text=target_rec_col)
                         fig_rec.update_traces(textposition="top center")
-
                         if '秒' in target_rec_col:
                             fig_rec.update_yaxes(autorange="reversed")
-                            fig_rec.update_layout(title=f"{rec_name} - {rec_metric_base} 歷次成績（秒數越低越好）")
+                            fig_rec.update_layout(title=f"{rec_name} - {rec_metric_base} 歷次紀錄（秒數越低越好）")
                         else:
-                            fig_rec.update_layout(title=f"{rec_name} - {rec_metric_base} 歷次成績（數值越高越好）")
+                            fig_rec.update_layout(title=f"{rec_name} - {rec_metric_base} 歷次紀錄（數值越高越好）")
                         st.plotly_chart(fig_rec, use_container_width=True)
                     else:
                         st.info(f"該員沒有 {rec_metric_base} 的測驗紀錄。")
@@ -475,9 +476,9 @@ if df is not None and not df.empty and len(test_metrics) > 0:
 
         with ca2:
             st.markdown("##### 📉 進步幅度退步預警")
-            reg_m = st.selectbox("退步預警項目（低於閾值）：", test_metrics, key='al_r1')
+            reg_m = st.selectbox("退步預警項目：", test_metrics, key='al_r1')
             reg_score_col = reg_m + "_成績"
-            reg_val = st.number_input("連續退步幅度閾值（高於此分退步）：", value=10)
+            reg_val = st.number_input("連續退步幅度閾值（減少超過）：", value=10)
 
             if len(all_dates) > 1:
                 d_now = latest_tested_df[['消防局大隊', '分隊', '姓名', reg_score_col]]
@@ -492,12 +493,11 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                 else:
                     st.success("🎉 沒有達到顯著退步標準！")
             else:
-                # ✅ 修正 Bug：只有一期資料時給友善提示
                 st.info("目前只有一期測驗資料，無法進行退步比較。")
 
         with ca3:
-            st.markdown("##### 🏅 進步幅度進步排行")
-            prog_m = st.selectbox("進步排行項目（高於閾值）：", test_metrics, key='al_p1')
+            st.markdown("##### 🏅 進步排行")
+            prog_m = st.selectbox("進步排行項目：", test_metrics, key='al_p1')
             prog_score_col = prog_m + "_成績"
             prog_val = st.number_input("進步幅度閾值：", value=5)
 
@@ -532,13 +532,11 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                 if not top_individuals.empty:
                     top_individuals.insert(0, '名次', range(1, len(top_individuals) + 1))
                     top_individuals['分數總和'] = top_individuals['分數總和'].astype(int)
-
                     if '年齡' in top_individuals.columns:
                         top_individuals['年齡'] = top_individuals['年齡'].astype('Int64')
                         display_cols = ['名次', '消防局大隊', '分隊', '姓名', '年齡', '分數總和']
                     else:
                         display_cols = ['名次', '消防局大隊', '分隊', '姓名', '分數總和']
-
                     st.dataframe(top_individuals[display_cols], hide_index=True, use_container_width=True)
                 else:
                     st.info("未找到分數總和資料。")
@@ -614,10 +612,7 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                 with st.expander(f"🔴 高風險人員名單（共 {len(high_risk_list)} 人）─ 點擊展開"):
                     display_risk_cols = ['消防局大隊', '分隊', '姓名', '年齡', '平均單項成績', '分數總和']
                     display_risk_cols = [c for c in display_risk_cols if c in high_risk_list.columns]
-                    st.dataframe(
-                        high_risk_list[display_risk_cols].sort_values('平均單項成績'),
-                        hide_index=True, use_container_width=True
-                    )
+                    st.dataframe(high_risk_list[display_risk_cols].sort_values('平均單項成績'), hide_index=True, use_container_width=True)
         else:
             st.warning("⚠️ 無分數總和資料，無法計算風險等級。")
 
@@ -666,11 +661,10 @@ if df is not None and not df.empty and len(test_metrics) > 0:
             weakest = avg_score_df.iloc[0]['測驗項目']
             weakest_score = avg_score_df.iloc[0]['全局平均成績']
             weakest_fail_rate = avg_score_df.iloc[0]['低於60分比率']
-            st.error(f"⚠️ **最弱項目：{weakest}**（平均 {weakest_score} 分，{weakest_fail_rate}% 人員低於60分）─ 建議加強專項訓練！")
+            st.error(f"⚠️ 最弱項目：{weakest}（平均 {weakest_score} 分，{weakest_fail_rate}% 人員低於60分）─ 建議加強專項訓練！")
 
         st.markdown("---")
         st.markdown("#### 三、年齡層訓練建議")
-
         age1, age2 = st.columns(2)
         with age1:
             if '年齡層' in latest_tested_df.columns and '分數總和' in latest_tested_df.columns:
@@ -701,7 +695,6 @@ if df is not None and not df.empty and len(test_metrics) > 0:
 
         st.markdown("---")
         st.markdown("#### 四、分隊訓練優先排行")
-
         if '分數總和' in latest_tested_df.columns:
             plan_filter_col, plan_chart_col = st.columns([1, 4])
             with plan_filter_col:
@@ -730,36 +723,34 @@ if df is not None and not df.empty and len(test_metrics) > 0:
 
         st.markdown("---")
         st.markdown("#### 五、訓練建議")
-
         rec_tab1, rec_tab2, rec_tab3 = st.tabs(["🏷️ 項目別訓練建議", "👥 年齡層別建議", "📅 年度訓練計畫"])
 
         with rec_tab1:
             st.markdown("""
 | 測驗項目 | 訓練建議 | 訓練方法 | 週訓次 |
 |----------|----------|----------|--------|
-| **1500公尺跑步** | 有氧耐力不足 | 有氧跑 / 間歇跑，每次20-30分鐘 | 週訓3次 |
-| **懸吊屈體** | 上半身控制/核心不足 | 引體向上 + 核心控制，屈體夾腿動作 | 週訓2次 |
-| **菱形槓硬舉** | 下背力量/爆發力不足 | 爆發力訓練/T型架硬舉，特殊輔助動作 | 週訓2次 |
-| **立定跳遠** | 下肢爆發力不足 | 增強式訓練/波比訓練，半蹲爆發跳 | 週訓2次 |
-| **後拋擲遠** | 核心爆發力不足 | 核心爆發力+T立式跑 | 週訓2次 |
-| **折返跑** | 敏捷性/速耐力不足 | 敏捷梯 / 間歇短跑 / 折返加速訓練 | 週訓2次 |
-| **負重行走** | 全身肌耐力不足 | 自我肌耐力 + 以kgBW計算有氧LSD路跑 | 週訓1次 |
+| 1500公尺跑步 | 有氧耐力不足 | 有氧跑 / 間歇跑，每次20-30分鐘 | 週訓3次 |
+| 懸吊屈體 | 上半身控制/核心不足 | 引體向上 + 核心控制，屈體夾腿動作 | 週訓2次 |
+| 菱形槓硬舉 | 下背力量/爆發力不足 | 爆發力訓練/T型架硬舉，特殊輔助動作 | 週訓2次 |
+| 立定跳遠 | 下肢爆發力不足 | 增強式訓練/波比訓練，半蹲爆發跳 | 週訓2次 |
+| 後拋擲遠 | 核心爆發力不足 | 核心爆發力+T立式跑 | 週訓2次 |
+| 折返跑 | 敏捷性/速耐力不足 | 敏捷梯 / 間歇短跑 / 折返加速訓練 | 週訓2次 |
+| 負重行走 | 全身肌耐力不足 | 自我肌耐力 + 以kgBW計算有氧LSD路跑 | 週訓1次 |
 """)
-
         with rec_tab2:
             st.markdown("""
 | 年齡層 | 注意事項 | 訓練調整建議 |
 |--------|----------|-------------|
-| **20-29歲** | 高強度不容易，骨骼肌發育仍在成熟 | 以強化技巧為主，慢慢增強訓練量 |
-| **30-39歲** | 體能下滑，結束運動後回復更慢 | 在週計劃保留恢復日 + 增強式訓練，避免過度訓練 |
-| **40-49歲** | 肌力/心肺開始明顯下滑，較易積傷 | 中低強度有氧鞏固 + 月計劃週期訓練，積極使用恢復課程 |
-| **50歲以上** | 訓練後恢復較慢，須特別重視代謝 | 訓練量減少，強度謹慎增加；積極使用伸展/靜態恢復課程 |
+| 20-29歲 | 高強度不容易，骨骼肌發育仍在成熟 | 以強化技巧為主，慢慢增強訓練量 |
+| 30-39歲 | 體能下滑，結束運動後回復更慢 | 在週計劃保留恢復日 + 增強式訓練，避免過度訓練 |
+| 40-49歲 | 肌力/心肺開始明顯下滑，較易積傷 | 中低強度有氧鞏固 + 月計劃週期訓練，積極使用恢復課程 |
+| 50歲以上 | 訓練後恢復較慢，須特別重視代謝 | 訓練量減少，強度謹慎增加；積極使用伸展/靜態恢復課程 |
 """)
-            st.warning("⚠️ 訓練 **50歲以上人員的訓練每一個月需降低一個強度**（或降低里程），以避免運動傷害；建議由教練評估整體訓練規劃及身體狀況。")
+            st.warning("⚠️ 訓練 50歲以上人員的訓練每一個月需降低一個強度（或降低里程），以避免運動傷害；建議由教練評估整體訓練規劃及身體狀況。")
 
         with rec_tab3:
             st.markdown("""
-**年度訓練週期建議（消防局體技能測驗）：**
+年度訓練週期建議（消防局體技能測驗）：
 
 - 📅 建議每月測驗進度並繳交成績，讓各分隊了解自身狀況
 - 📊 在測驗3個月前開始密集訓練，提升有針對性弱項的訓練比例
@@ -767,11 +758,10 @@ if df is not None and not df.empty and len(test_metrics) > 0:
 - 🏅 高分組（≥90分）可維持現有訓練強度，鼓勵帶動其他人進步（進步激勵機制）
 """)
 
-    # ===== Tab 8: 深度分析（新 Tab）=====
+    # ===== Tab 8: 深度分析 =====
     with tab_stats:
         st.subheader("🔬 深度統計分析")
         st.caption("本頁提供相關性分析、BMI計算，以及特殊狀態人員追蹤。")
-
         analysis_tab1, analysis_tab2, analysis_tab3 = st.tabs(["📐 項目相關性分析", "⚖️ BMI 計算", "🏥 特殊狀態追蹤"])
 
         with analysis_tab1:
@@ -787,35 +777,24 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                     corr_matrix.columns = [c.replace('_成績', '') for c in corr_matrix.columns]
 
                     fig_corr = go.Figure(data=go.Heatmap(
-                        z=corr_matrix.values,
-                        x=corr_matrix.columns.tolist(),
-                        y=corr_matrix.index.tolist(),
-                        colorscale='RdYlGn',
-                        zmin=-1, zmax=1,
-                        text=corr_matrix.values.round(2),
-                        texttemplate='%{text}',
-                        textfont={"size": 12},
+                        z=corr_matrix.values, x=corr_matrix.columns.tolist(), y=corr_matrix.index.tolist(),
+                        colorscale='RdYlGn', zmin=-1, zmax=1,
+                        text=corr_matrix.values.round(2), texttemplate='%{text}', textfont={"size": 12},
                     ))
-                    fig_corr.update_layout(
-                        title=f"測驗項目成績相關性矩陣（n={len(corr_data)}）",
-                        height=500
-                    )
+                    fig_corr.update_layout(title=f"測驗項目成績相關性矩陣（n={len(corr_data)}）", height=500)
                     st.plotly_chart(fig_corr, use_container_width=True)
-
-                    st.markdown("**高相關性項目對（|r| > 0.5）：**")
-                    high_corr = []
-                    for i in range(len(corr_matrix.columns)):
-                        for j in range(i+1, len(corr_matrix.columns)):
-                            r = corr_matrix.iloc[i, j]
-                            if abs(r) > 0.5:
-                                high_corr.append({
-                                    '項目A': corr_matrix.columns[i],
-                                    '項目B': corr_matrix.columns[j],
-                                    '相關係數': round(r, 3),
-                                    '關係': '正相關' if r > 0 else '負相關'
-                                })
-                    if high_corr:
-                        st.dataframe(pd.DataFrame(high_corr).sort_values('相關係數', ascending=False), hide_index=True, use_container_width=True)
+                    
+                    # ✅ 修正點：使用 Pandas 內建方法取代雙層迴圈
+                    st.markdown("高相關性項目對（|r| > 0.5）：")
+                    corr_unstacked = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)).unstack().dropna()
+                    high_corr_series = corr_unstacked[abs(corr_unstacked) > 0.5]
+                    
+                    if not high_corr_series.empty:
+                        high_corr_df = high_corr_series.reset_index()
+                        high_corr_df.columns = ['項目A', '項目B', '相關係數']
+                        high_corr_df['相關係數'] = high_corr_df['相關係數'].round(3)
+                        high_corr_df['關係'] = np.where(high_corr_df['相關係數'] > 0, '正相關', '負相關')
+                        st.dataframe(high_corr_df.sort_values('相關係數', ascending=False), hide_index=True, use_container_width=True)
                     else:
                         st.info("沒有顯著高相關的項目對（|r| ≤ 0.5）。")
                 else:
@@ -835,8 +814,7 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                         fig_scatter = px.scatter(
                             scatter_df, x=x_metric+'_成績', y=y_metric+'_成績',
                             color='消防局大隊', hover_data=['姓名'],
-                            title=f"{x_metric} vs {y_metric} 散點圖",
-                            trendline="ols"
+                            title=f"{x_metric} vs {y_metric} 散點圖", trendline="ols"
                         )
                         st.plotly_chart(fig_scatter, use_container_width=True)
 
@@ -847,8 +825,13 @@ if df is not None and not df.empty and len(test_metrics) > 0:
 
             if height_col and weight_col:
                 bmi_df = latest_tested_df.copy()
-                bmi_df['BMI'] = (pd.to_numeric(bmi_df[weight_col], errors='coerce') /
-                                  (pd.to_numeric(bmi_df[height_col], errors='coerce') / 100) ** 2).round(1)
+                
+                # ✅ 修正點：避免身高為 0 造成除以零崩潰
+                weight_num = pd.to_numeric(bmi_df[weight_col], errors='coerce')
+                height_m = pd.to_numeric(bmi_df[height_col], errors='coerce') / 100
+                height_m = height_m.replace(0, np.nan)
+                
+                bmi_df['BMI'] = (weight_num / (height_m ** 2)).round(1)
                 bmi_df = bmi_df.dropna(subset=['BMI'])
 
                 def classify_bmi(bmi):
@@ -868,8 +851,7 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                 with bc2:
                     if '分數總和' in bmi_df.columns:
                         fig_bmi_score = px.scatter(bmi_df, x='BMI', y='分數總和', color='BMI分類',
-                                                    hover_data=['姓名'], title="BMI vs 總成績關係圖",
-                                                    trendline="ols")
+                                                   hover_data=['姓名'], title="BMI vs 總成績關係圖", trendline="ols")
                         st.plotly_chart(fig_bmi_score, use_container_width=True)
             else:
                 st.info("📊 目前資料中無身高體重欄位，無法自動計算BMI。提供手動計算工具：")
@@ -884,7 +866,7 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                     elif manual_bmi < 27: bmi_status = "⚠️ 過重"
                     else: bmi_status = "🔴 肥胖"
                     st.metric("BMI值", f"{manual_bmi:.1f}")
-                    st.write(f"**BMI分類**：{bmi_status}")
+                    st.write(f"BMI分類：{bmi_status}")
 
         with analysis_tab3:
             st.markdown("#### 🏥 特殊狀態人員追蹤")
@@ -896,8 +878,7 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                 status_counts = special_df['特殊狀態'].value_counts().reset_index()
                 status_counts.columns = ['狀態', '人數']
                 fig_status = px.bar(status_counts, x='狀態', y='人數', text='人數',
-                                    title="特殊狀態類型統計",
-                                    color_discrete_sequence=['#6c757d'])
+                                    title="特殊狀態類型統計", color_discrete_sequence=['#6c757d'])
                 fig_status.update_traces(textposition='outside')
                 st.plotly_chart(fig_status, use_container_width=True)
             else:
