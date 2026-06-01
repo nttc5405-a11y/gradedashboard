@@ -5,7 +5,7 @@ import numpy as np
 import plotly.graph_objects as go  # 新增：用於疊加直方圖與曲線
 import scipy.stats as stats        # 新增：用於計算常態分布理論值
 
-st.set_page_config(page_title="台東縣消防局 - 體技能儀表板 3.0", page_icon="🚒", layout="wide")
+st.set_page_config(page_title="台東消防體技能：視覺化議題", page_icon="🚒", layout="wide")
 
 # --- 進階實體按鈕樣式與版面設計 ---
 st.markdown("""
@@ -20,9 +20,9 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🚒 消防體技能儀表板")
+st.title("🚒 114-2 運動大數據與視覺化分析專題研究/姓名沈煒翔")
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=600)
 def load_and_clean_data():
     try:
         sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQcsv0lMJmU68FYuyXRY6H4T9j9j8xgaC9xnSWwrCGbSuqACG1geXM34e-nvimhVQ/pub?gid=1434005373&single=true&output=csv"
