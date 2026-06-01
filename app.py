@@ -111,6 +111,17 @@ record_col_mapping = {
     '1500公尺跑步': '1500公尺跑步_總秒數'
 }
 
+# 各項測驗滿分（用於跨項標準化比較）
+max_score_map = {
+    '立定跳遠': 10,
+    '後拋擲遠': 15,
+    '折返跑': 10,
+    '菱形槓硬舉': 20,
+    '懸吊屈體': 15,
+    '負重行走': 10,
+    '1500公尺跑步': 20,
+}
+
 if df is not None and not df.empty and len(test_metrics) > 0:
     all_dates = sorted(df['測驗日期'].dropna().unique(), reverse=True)
     latest_date = all_dates[0] if all_dates else '本次測驗'
@@ -246,7 +257,10 @@ if df is not None and not df.empty and len(test_metrics) > 0:
                         age_avg = age_group_df[score_col].mean() if not age_group_df.empty else None
                         age_avg_text = f" | 同齡平均: {age_avg:.1f}分" if age_avg and pd.notna(age_avg) else ""
 
-                        st.write(f"- {m}： {rec_val} / 得 {score_val} 分 <span style='color:gray; font-size:14px;'>{age_avg_text}</span>", unsafe_allow_html=True)
+                        max_s = max_score_map.get(m, None)
+                        max_text = f"/{max_s}分" if max_s else ""
+                        pct_text = f"（{score_val/max_s*100:.0f}%）" if max_s and isinstance(score_val, (int, float)) and pd.notna(score_val) else ""
+                        st.write(f"- {m}： {rec_val} / 得 {score_val}{max_text} {pct_text}<span style='color:gray; font-size:14px;'>{age_avg_text}</span>", unsafe_allow_html=True)
 
             with cp2:
                 if not p_records.empty:
@@ -326,7 +340,9 @@ if df is not None and not df.empty and len(test_metrics) > 0:
             st.markdown("##### ❌ 自訂未達標監控")
             fail_m = st.selectbox("監控達標項目 (以分數為準)：", test_metrics, key='al_f1')
             fail_score_col = fail_m + '_成績'
-            fail_val = st.number_input("最低及格標準：", value=60)
+            fail_max = max_score_map.get(fail_m, None)
+            fail_default = round(fail_max * 0.6) if fail_max else 60
+            fail_val = st.number_input(f"最低及格標準（滿分 {fail_max} 分）：" if fail_max else "最低及格標準：", value=fail_default)
 
             fail_list = latest_tested_df[latest_tested_df[fail_score_col] < fail_val]
             if not fail_list.empty:
@@ -578,34 +594,47 @@ if df is not None and not df.empty and len(test_metrics) > 0:
             if sc in latest_tested_df.columns:
                 vals = latest_tested_df[sc].dropna()
                 if len(vals) > 0:
+                    max_s = max_score_map.get(m, None)
+                    avg_raw = vals.mean()
+                    avg_pct = round(avg_raw / max_s * 100, 1) if max_s else None
+                    fail_threshold = max_s * 0.6 if max_s else 60
                     score_avgs.append({
                         '測驗項目': m,
-                        '全體平均分': round(vals.mean(), 1),
-                        '低於60分人數': int((vals < 60).sum()),
-                        '低於60分比率': round((vals < 60).mean() * 100, 1),
+                        '滿分': max_s if max_s else '-',
+                        '全體平均分': round(avg_raw, 1),
+                        '得分率(%)': avg_pct if avg_pct else '-',
+                        '未達6成人數': int((vals < fail_threshold).sum()),
+                        '未達6成比率': round((vals < fail_threshold).mean() * 100, 1),
                     })
 
         if score_avgs:
-            avg_score_df = pd.DataFrame(score_avgs).sort_values(by='全體平均分')
+            avg_score_df = pd.DataFrame(score_avgs)
+            # 用得分率排序，才能跨不同滿分的項目公平比較
+            has_pct = avg_score_df['得分率(%)'].apply(lambda x: isinstance(x, (int, float))).all()
+            sort_col = '得分率(%)' if has_pct else '全體平均分'
+            avg_score_df = avg_score_df.sort_values(by=sort_col)
 
             diag1, diag2 = st.columns([3, 2])
             with diag1:
                 fig_avg = px.bar(
-                    avg_score_df, x='測驗項目', y='全體平均分', text='全體平均分',
-                    title="各測驗項目全體平均得分（由低到高）",
-                    color='全體平均分',
-                    color_continuous_scale=['#dc3545', '#ffc107', '#28a745']
+                    avg_score_df, x='測驗項目', y=sort_col,
+                    text=sort_col,
+                    title="各測驗項目得分率（%）—— 跨項公平比較（由低到高）",
+                    color=sort_col,
+                    color_continuous_scale=['#dc3545', '#ffc107', '#28a745'],
+                    hover_data=['滿分', '全體平均分'],
                 )
-                fig_avg.update_traces(textposition='outside')
-                fig_avg.update_layout(coloraxis_showscale=False, xaxis_title="", yaxis_title="平均得分")
+                fig_avg.update_traces(texttemplate='%{text}%' if has_pct else '%{text}', textposition='outside')
+                fig_avg.update_layout(coloraxis_showscale=False, xaxis_title="", yaxis_title="得分率 (%)" if has_pct else "平均得分",
+                                      yaxis_range=[0, 110] if has_pct else None)
                 st.plotly_chart(fig_avg, use_container_width=True)
 
             with diag2:
                 fig_fail = px.bar(
-                    avg_score_df.sort_values('低於60分比率', ascending=False),
-                    x='測驗項目', y='低於60分比率', text='低於60分比率',
-                    title="各項目低於60分人員比率（%）",
-                    color='低於60分比率',
+                    avg_score_df.sort_values('未達6成比率', ascending=False),
+                    x='測驗項目', y='未達6成比率', text='未達6成比率',
+                    title="各項目未達滿分6成人員比率（%）",
+                    color='未達6成比率',
                     color_continuous_scale=['#28a745', '#ffc107', '#dc3545']
                 )
                 fig_fail.update_traces(texttemplate='%{text}%', textposition='outside')
@@ -614,8 +643,11 @@ if df is not None and not df.empty and len(test_metrics) > 0:
 
             weakest = avg_score_df.iloc[0]['測驗項目']
             weakest_score = avg_score_df.iloc[0]['全體平均分']
-            weakest_fail_rate = avg_score_df.iloc[0]['低於60分比率']
-            st.error(f"⚠️ 最弱項目：{weakest}（平均 {weakest_score} 分，{weakest_fail_rate}% 人員低於60分）— 應列為全體優先訓練目標。")
+            weakest_max = avg_score_df.iloc[0]['滿分']
+            weakest_pct = avg_score_df.iloc[0]['得分率(%)']
+            weakest_fail_rate = avg_score_df.iloc[0]['未達6成比率']
+            pct_str = f"，得分率 {weakest_pct}%" if isinstance(weakest_pct, (int, float)) else ""
+            st.error(f"⚠️ 最弱項目：{weakest}（平均 {weakest_score}/{weakest_max} 分{pct_str}，{weakest_fail_rate}% 人員未達6成）— 應列為全體優先訓練目標。")
 
         # ── 三、年齡層體能表現分析 ────────────────────────────────
         st.markdown("---")
